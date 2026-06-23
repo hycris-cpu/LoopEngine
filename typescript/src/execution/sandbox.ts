@@ -101,6 +101,9 @@ export interface Sandbox {
   /**
    * Search for a regex pattern in file contents.
    *
+   * The search is limited to a whitelist of text file extensions
+   * (e.g., .py, .ts, .md, .txt, .json).
+   *
    * Args:
    *   pattern: The regex pattern to search for.
    *   path: The directory to search in (default: current dir).
@@ -257,7 +260,7 @@ export class LocalSandbox implements Sandbox {
     }
   }
 
-  async _grep_python(pattern: string, basePath: string): Promise<string[]> {
+  private async _grep_python(pattern: string, basePath: string): Promise<string[]> {
     const results: string[] = [];
     const regex = new RegExp(pattern);
     const textExtensions = new Set([

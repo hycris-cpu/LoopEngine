@@ -22,7 +22,11 @@
  *     const results = await harness.run_batch(tasks, 4);
  */
 
-import { RunResult, ModelProvider, run_loop } from './runloop';
+import { RunResult, run_loop } from './runloop';
+import type { ModelProvider } from './runloop';
+import type { HarnessBuilder } from '../composition/builder';
+import type { HarnessConfig } from '../composition/config';
+import type { Sandbox } from './sandbox';
 import type { Task } from './task';
 
 /**
@@ -41,8 +45,8 @@ import type { Task } from './task';
  */
 export class Harness {
   model: ModelProvider;
-  config: unknown;
-  sandbox: unknown;
+  config: HarnessConfig | null;
+  sandbox: Sandbox | null;
 
   /**
    * Initialize a Harness.
@@ -52,7 +56,7 @@ export class Harness {
    *   config: A HarnessConfig with processors, tools, flags, and slots.
    *   sandbox: Optional sandboxed execution environment.
    */
-  constructor(model: ModelProvider, config: unknown = null, sandbox: unknown = null) {
+  constructor(model: ModelProvider, config: HarnessConfig | null = null, sandbox: Sandbox | null = null) {
     this.model = model;
     this.config = config;
     this.sandbox = sandbox;
@@ -132,7 +136,7 @@ export class Harness {
    * Returns:
    *   A new Harness configured from the builder's blueprint.
    */
-  static from_builder(builder: { build(): unknown }, model: ModelProvider, sandbox: unknown = null): Harness {
+  static from_builder(builder: HarnessBuilder, model: ModelProvider, sandbox: Sandbox | null = null): Harness {
     const config = builder.build();
     return new Harness(model, config, sandbox);
   }

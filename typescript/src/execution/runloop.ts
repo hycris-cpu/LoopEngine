@@ -19,10 +19,13 @@
 
 import { randomUUID } from 'node:crypto';
 import { ProcessorEntry } from '../composition/config';
+import type { HarnessConfig } from '../composition/config';
+import type { Sandbox } from './sandbox';
 import { Event, EvalResult, Message, MessageType, ToolCall, ToolResult } from '../primitives/events';
 import { HOOK_POINTS, ProcessorChain } from '../primitives/processors';
 import { State } from '../primitives/state';
-import { Tool, ToolContext } from '../primitives/tools';
+import type { Tool } from '../primitives/tools';
+import { ToolContext } from '../primitives/tools';
 import { Trajectory, TrajectoryStep } from '../primitives/trajectory';
 import type { Task } from './task';
 
@@ -135,8 +138,8 @@ export class RunResult {
 export async function run_loop(
   task: Task,
   model: ModelProvider,
-  config: unknown = null,
-  sandbox: unknown = null,
+  config: HarnessConfig | null = null,
+  sandbox: Sandbox | null = null,
   run_id: string | null = null
 ): Promise<RunResult> {
   if (run_id === null) {
@@ -144,9 +147,8 @@ export async function run_loop(
   }
 
   // Extract processors and tools from config
-  const cfg = config as { processors?: ProcessorEntry[]; tools?: Tool[] } | null;
-  const processorEntries: ProcessorEntry[] = cfg?.processors ?? [];
-  const tools: Tool[] = cfg?.tools ?? [];
+  const processorEntries: ProcessorEntry[] = config?.processors ?? [];
+  const tools: Tool[] = config?.tools ?? [];
 
   // Build processor chains for each hook point
   // Sort by order so lower-order processors run first
@@ -318,6 +320,9 @@ export async function run_loop(
  * This is the "routing" logic — each event type maps to a specific
  * hook point, and the event is processed through that hook's chain.
  *
+ * Note: The returned list of events is currently unused by `run_loop`.
+ * It is exposed for future processor chains that may transform events.
+ *
  * Args:
  *   event: The event to emit.
  *   hookChains: Mapping from hook point name to ProcessorChain.
@@ -365,7 +370,7 @@ async function _execute_tool(
   toolCall: ToolCall,
   toolMap: Record<string, Tool>,
   state: State,
-  sandbox: unknown,
+  sandbox: Sandbox | null,
   runId: string,
   step: number
 ): Promise<ToolResult> {

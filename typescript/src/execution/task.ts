@@ -165,9 +165,6 @@ export class SimpleTask implements Task {
   async evaluate(trajectory: Trajectory): Promise<EvalResult> {
     if (this.eval_fn !== null) {
       const result = await this.eval_fn(trajectory, this);
-      if (result instanceof EvalResult) {
-        return result;
-      }
       return result;
     }
     return new EvalResult({ passed: false, score: 0.0, reason: 'No evaluation function provided' });
