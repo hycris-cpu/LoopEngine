@@ -2,6 +2,8 @@
 
 A TypeScript/Bun port of the Python LoopEngine library.
 
+Requires Bun 1.x.
+
 ## Development
 
 Install dependencies:

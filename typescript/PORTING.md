@@ -16,7 +16,8 @@
 | `@dataclass` | `class` with public properties; mutable defaults created fresh in constructor |
 | `@dataclass(frozen=True)` | `class` with `readonly` properties, assigned only in the constructor |
 | `__post_init__` | Constructor body after field assignments |
-| `str, enum.Enum` | TypeScript string enum |
+| `str` | `string` |
+| `enum.Enum` | TypeScript string enum |
 | `typing.Protocol` | `interface` |
 | `dict[str, Any]` | `Record<string, unknown>` |
 | `tuple[T, ...]` | `readonly T[]` |
@@ -27,7 +28,7 @@
 | Exceptions | Custom `Error` subclasses |
 | `pytest` fixtures | `beforeEach` + factory helpers |
 | `unittest.mock.AsyncMock` | `mock()` from `bun:test` or inline async stubs |
-| `tmp_path` | `tmpDirSync()` from `node:fs` |
+| `tmp_path` | `mkdtempSync(os.tmpdir())` using `node:fs` and `node:os` |
 
 ## Tests
 - Use `import { describe, test, expect, beforeEach, mock } from 'bun:test'`.
