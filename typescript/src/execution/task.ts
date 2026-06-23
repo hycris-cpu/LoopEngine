@@ -16,8 +16,9 @@
  */
 
 import { EvalResult } from '../primitives/events';
-import { Budget, State } from '../primitives/state';
-import { Trajectory } from '../primitives/trajectory';
+import { Budget } from '../primitives/state';
+import type { State } from '../primitives/state';
+import type { Trajectory } from '../primitives/trajectory';
 
 /**
  * Task Protocol — the interface all tasks must satisfy.

@@ -18,7 +18,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { ProcessorEntry } from '../composition/config';
+import type { ProcessorEntry } from '../composition/config';
 import type { HarnessConfig } from '../composition/config';
 import type { Sandbox } from './sandbox';
 import { Event, EvalResult, Message, MessageType, ToolCall, ToolResult } from '../primitives/events';
