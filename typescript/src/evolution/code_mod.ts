@@ -35,6 +35,24 @@ const DANGEROUS_PATTERNS: RegExp[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Replace the first occurrence of `search` in `content` with `replace`.
+ *
+ * This mirrors Python's `str.replace(old, new, 1)` behavior, ensuring each
+ * diff hunk only modifies a single location in the file.
+ */
+function replaceFirst(content: string, search: string, replace: string): string {
+  const idx = content.indexOf(search);
+  if (idx === -1) {
+    return content;
+  }
+  return content.slice(0, idx) + replace + content.slice(idx + search.length);
+}
+
+// ---------------------------------------------------------------------------
 // CodeMod — a single proposed change
 // ---------------------------------------------------------------------------
 
@@ -146,7 +164,7 @@ export class CodeMod {
     // Apply each hunk: replace old text with new text
     for (const [old_text, new_text] of hunks) {
       if (old_text && content.includes(old_text)) {
-        content = content.replace(old_text, new_text);
+        content = replaceFirst(content, old_text, new_text);
       }
     }
 
