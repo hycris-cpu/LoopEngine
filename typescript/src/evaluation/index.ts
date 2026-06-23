@@ -1,13 +1,13 @@
+export type { Judge } from './judges';
 export {
-  Judge,
   TestSuiteJudge,
   LLMJudge,
   MetricJudge,
   CompositeJudge,
 } from './judges';
 
+export type { Metric } from './metrics';
 export {
-  Metric,
   PassRateMetric,
   EfficiencyMetric,
   CustomMetric,

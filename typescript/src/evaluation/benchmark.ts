@@ -14,7 +14,7 @@
  * cards tells you which subjects improved and which got worse.
  */
 
-import { EvalResult } from '../primitives/events';
+import type { EvalResult } from '../primitives/events';
 import { Trajectory } from '../primitives/trajectory';
 import type { Judge } from './judges';
 

@@ -41,17 +41,17 @@ interface TaskLike {
 }
 
 
-/** Minimal Sandbox protocol for evaluation. */
-interface SandboxLike {
-  /**
-   * Execute a shell command and return its output.
-   *
-   * @param command - The shell command to execute.
-   * @param cwd - Working directory for the command (default: current dir).
-   * @param timeout - Maximum execution time in seconds (default: 30).
-   * @returns A tuple of (stdout, stderr, exit_code).
-   */
-  exec(command: string, cwd?: string, timeout?: number): Promise<[string, string, number]>;
+function isTaskLike(value: unknown): value is TaskLike {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    'prompt' in value &&
+    typeof (value as { prompt?: unknown }).prompt === 'string' &&
+    'max_steps' in value &&
+    typeof (value as { max_steps?: unknown }).max_steps === 'number' &&
+    'is_done' in value &&
+    typeof (value as { is_done?: unknown }).is_done === 'function'
+  );
 }
 
 
@@ -191,7 +191,7 @@ export class TestSuiteJudge implements Judge {
    * @returns An EvalResult with the test pass rate as score.
    */
   async evaluate(trajectory: Trajectory, task: unknown): Promise<EvalResult> {
-    const [stdout, stderr, exit_code] = await this._sandbox.exec(this._test_command);
+    const [stdout, stderr, _exit_code] = await this._sandbox.exec(this._test_command);
 
     const [passed, failed] = TestSuiteJudge.parse_pytest_output(stdout, stderr);
     const total = passed + failed;
@@ -311,7 +311,10 @@ export class LLMJudge implements Judge {
    * @returns A list of Message objects to send to the model.
    */
   build_prompt(trajectory: Trajectory, task: unknown): Message[] {
-    const task_like = task as TaskLike;
+    if (!isTaskLike(task)) {
+      throw new TypeError('task must be TaskLike for LLMJudge.build_prompt');
+    }
+    const task_like = task;
 
     // Summarize the trajectory into a readable format
     const step_summaries: string[] = [];
@@ -390,16 +393,6 @@ export class LLMJudge implements Judge {
 // ---------------------------------------------------------------------------
 
 
-/** Minimal Metric protocol for evaluation stubs. */
-interface MetricLike {
-  /** The metric's name. */
-  readonly name: string;
-
-  /** Evaluate and return a score between 0.0 and 1.0. */
-  evaluate(trajectory: Trajectory, task: unknown): Promise<number>;
-}
-
-
 // ---------------------------------------------------------------------------
 // MetricJudge — evaluates using a list of Metric objects
 // ---------------------------------------------------------------------------
@@ -440,7 +433,7 @@ export class MetricJudge implements Judge {
 
   /** The list of metrics being evaluated. */
   get metrics(): Metric[] {
-    return this._metrics;
+    return [...this._metrics];
   }
 
   /**
@@ -528,7 +521,7 @@ export class CompositeJudge implements Judge {
 
   /** The list of (judge, weight) tuples. */
   get judges(): [Judge, number][] {
-    return this._judges;
+    return [...this._judges];
   }
 
   /**
@@ -554,13 +547,13 @@ export class CompositeJudge implements Judge {
       });
     }
 
-    const sub_results: [string, number, number, EvalResult][] = [];
+    const sub_results: [string, number, number][] = [];
     let total_weight = 0.0;
     let weighted_sum = 0.0;
 
     for (const [judge, weight] of this._judges) {
       const result = await judge.evaluate(trajectory, task);
-      sub_results.push([judge.name, weight, result.score, result]);
+      sub_results.push([judge.name, weight, result.score]);
       weighted_sum += result.score * weight;
       total_weight += weight;
     }

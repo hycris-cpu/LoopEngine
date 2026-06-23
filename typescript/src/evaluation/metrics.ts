@@ -40,17 +40,17 @@ interface TaskLike {
 }
 
 
-/** Minimal Sandbox protocol for metrics. */
-interface SandboxLike {
-  /**
-   * Execute a shell command and return its output.
-   *
-   * @param command - The shell command to execute.
-   * @param cwd - Working directory for the command (default: current dir).
-   * @param timeout - Maximum execution time in seconds (default: 30).
-   * @returns A tuple of (stdout, stderr, exit_code).
-   */
-  exec(command: string, cwd?: string, timeout?: number): Promise<[string, string, number]>;
+function isTaskLike(value: unknown): value is TaskLike {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    'prompt' in value &&
+    typeof (value as { prompt?: unknown }).prompt === 'string' &&
+    'max_steps' in value &&
+    typeof (value as { max_steps?: unknown }).max_steps === 'number' &&
+    'is_done' in value &&
+    typeof (value as { is_done?: unknown }).is_done === 'function'
+  );
 }
 
 
@@ -178,7 +178,7 @@ export class PassRateMetric implements Metric {
    * @returns A float score between 0.0 and 1.0.
    */
   async evaluate(trajectory: Trajectory, task: unknown): Promise<number> {
-    const [stdout, stderr, exit_code] = await this._sandbox.exec(this._test_command);
+    const [stdout, stderr, _exit_code] = await this._sandbox.exec(this._test_command);
     const [passed, failed] = PassRateMetric.parse_output(stdout, stderr);
     const total = passed + failed;
 
@@ -228,7 +228,10 @@ export class EfficiencyMetric implements Metric {
    * @returns A float score between 0.0 and 1.0.
    */
   async evaluate(trajectory: Trajectory, task: unknown): Promise<number> {
-    const task_like = task as TaskLike;
+    if (!isTaskLike(task)) {
+      throw new TypeError('task must be TaskLike for EfficiencyMetric');
+    }
+    const task_like = task;
     const steps_used = trajectory.steps.length;
     const max_steps = task_like.max_steps && task_like.max_steps > 0 ? task_like.max_steps : 1;
 
@@ -290,14 +293,6 @@ export class CustomMetric implements Metric {
    * @returns A float score between 0.0 and 1.0.
    */
   async evaluate(trajectory: Trajectory, task: unknown): Promise<number> {
-    const result = this._eval_fn(trajectory, task);
-    if (result instanceof Promise || (
-      result !== null &&
-      typeof result === 'object' &&
-      typeof (result as PromiseLike<unknown>).then === 'function'
-    )) {
-      return await (result as Promise<number>);
-    }
-    return result as number;
+    return await this._eval_fn(trajectory, task);
   }
 }
