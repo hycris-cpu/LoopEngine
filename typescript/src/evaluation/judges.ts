@@ -363,9 +363,7 @@ export class LLMJudge implements Judge {
     const messages = this.build_prompt(trajectory, task);
     const response = await this._model.complete(messages);
 
-    const response_text = typeof response === 'object' && response !== null && 'content' in response
-      ? String((response as { content: unknown }).content)
-      : String(response);
+    const response_text = String(response.content);
 
     let score: number;
     try {
