@@ -22,6 +22,46 @@ import { Processor, HOOK_POINTS } from '../primitives/processors';
 import { Tool } from '../primitives/tools';
 
 /**
+ * Serialize a value to a canonical JSON string matching Python's
+ * `json.dumps(value, sort_keys=True, default=str)`.
+ *
+ * Key properties:
+ * - Object keys are sorted recursively.
+ * - Non-serializable values (functions, symbols, undefined) fall back to
+ *   their `String()` representation, just like Python's `default=str`.
+ * - Separators are `', '` and `': '` with no extra whitespace.
+ */
+function canonicalJson(value: unknown): string {
+  return serialize(value);
+}
+
+function serialize(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === true) return 'true';
+  if (value === false) return 'false';
+
+  const type = typeof value;
+  if (type === 'number') {
+    return Number.isFinite(value) ? String(value) : String(value);
+  }
+  if (type === 'string') {
+    return JSON.stringify(value);
+  }
+  if (type === 'bigint' || type === 'function' || type === 'symbol' || value === undefined) {
+    return JSON.stringify(String(value));
+  }
+  if (Array.isArray(value)) {
+    const items = value.map((item) => serialize(item));
+    return '[' + items.join(', ') + ']';
+  }
+
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  const pairs = keys.map((key) => `${JSON.stringify(key)}: ${serialize(obj[key])}`);
+  return '{' + pairs.join(', ') + '}';
+}
+
+/**
  * A processor registered in a config, with its hook point and priority.
  *
  * Think of this as a job assignment slip — it says WHO (processor),
@@ -126,14 +166,7 @@ export class HarnessConfig {
    * @returns A hex string (64 chars) representing the SHA-256 hash.
    */
   fingerprint(): string {
-    const canonical = JSON.stringify(this.to_dict(), (_key, value) => {
-      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-        return Object.fromEntries(
-          Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
-        );
-      }
-      return value;
-    });
+    const canonical = canonicalJson(this.to_dict());
     return createHash('sha256').update(canonical, 'utf-8').digest('hex');
   }
 
@@ -175,7 +208,7 @@ export class HarnessConfig {
       if (!validHooks.has(pe.hook)) {
         errors.push(
           `Processor '${pe.processor.name}' has invalid hook '${pe.hook}'. ` +
-            `Must be one of: ${HOOK_POINTS.join(', ')}`
+            `Must be one of: ${JSON.stringify(HOOK_POINTS)}.`
         );
       }
       const combo = `${pe.processor.name}|${pe.hook}|${pe.order}`;

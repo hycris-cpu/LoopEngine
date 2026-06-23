@@ -1,3 +1,5 @@
+import { KeyError } from './errors';
+
 /**
  * Feature flags let you turn capabilities on and off without changing code.
  *
@@ -140,11 +142,11 @@ export class FlagRegistry {
    *
    * @param name - The flag name to update.
    * @param value - The new value (True = enabled, False = disabled).
-   * @throws Error if the flag is not registered.
+   * @throws KeyError if the flag is not registered.
    */
   set(name: string, value: boolean): void {
     if (!(name in this._flags)) {
-      throw new Error(
+      throw new KeyError(
         `Flag '${name}' is not registered. Register it first with register().`
       );
     }

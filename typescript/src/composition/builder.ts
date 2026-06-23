@@ -20,6 +20,7 @@ import { Processor } from '../primitives/processors';
 import { Tool } from '../primitives/tools';
 import { HarnessConfig, ProcessorEntry } from './config';
 import { Plugin, PluginProcessorItem } from './plugins';
+import { ValueError } from './errors';
 
 /**
  * An immutable builder for assembling HarnessConfig objects.
@@ -81,9 +82,9 @@ export class HarnessBuilder {
    * @param order - Priority within the hook (lower = runs first).
    * @param singletonGroup - Optional group name for merge conflict detection.
    *   If two builders both add a processor in the same singletonGroup,
-   *   merging them raises Error.
+   *   merging them raises ValueError.
    * @returns A NEW HarnessBuilder with the processor added.
-   * @throws Error if singletonGroup already has a processor in this builder.
+   * @throws ValueError if singletonGroup already has a processor in this builder.
    */
   add(
     processor: Processor,
@@ -95,7 +96,7 @@ export class HarnessBuilder {
     const newGroups = new Set(this._singletonGroups);
     if (singletonGroup !== undefined) {
       if (this._singletonGroups.has(singletonGroup)) {
-        throw new Error(
+        throw new ValueError(
           `Singleton group '${singletonGroup}' already has a processor ` +
             `in this builder. Cannot add '${processor.name}'.`
         );
@@ -246,14 +247,21 @@ export class HarnessBuilder {
    * Plain English: "I want a coding agent AND reliability safety nets."
    * coding.merge(reliability) gives you a new builder with everything from both.
    *
-   * Raises Error if both builders have processors in the same
+   * Raises ValueError if both builders have processors in the same
    * singleton group (conflict detection).
    *
    * @param other - Another HarnessBuilder to merge with.
    * @returns A NEW HarnessBuilder combining both builders' parts.
-   * @throws Error if there are singleton group conflicts.
+   * @throws TypeError if `other` is not a HarnessBuilder.
+   * @throws ValueError if there are singleton group conflicts.
    */
   merge(other: HarnessBuilder): HarnessBuilder {
+    if (!(other instanceof HarnessBuilder)) {
+      throw new TypeError(
+        `Cannot merge HarnessBuilder with ${Object.prototype.toString.call(other).slice(8, -1)}. Use | only between two HarnessBuilder instances.`
+      );
+    }
+
     // Check for singleton group conflicts
     const conflicts: string[] = [];
     for (const group of this._singletonGroups) {
@@ -262,7 +270,7 @@ export class HarnessBuilder {
       }
     }
     if (conflicts.length > 0) {
-      throw new Error(
+      throw new ValueError(
         `Cannot merge builders: singleton group conflict(s) in ${conflicts.join(', ')}. ` +
           'Both builders have processors claiming the same exclusive role.'
       );

@@ -96,10 +96,12 @@ class _StubTool implements Tool {
  * - Flags for code-aware features
  * - A working directory slot
  *
- * @param workingDir - The directory where code lives (default: current dir).
+ * @param options - Options for the coding bundle.
+ * @param options.working_dir - The directory where code lives (default: current dir).
  * @returns A HarnessBuilder with coding capabilities pre-loaded.
  */
-export function make_coding(workingDir: string = '.'): HarnessBuilder {
+export function make_coding(options: { working_dir?: string } = {}): HarnessBuilder {
+  const { working_dir = '.' } = options;
   let builder = new HarnessBuilder();
 
   // Processors
@@ -126,7 +128,7 @@ export function make_coding(workingDir: string = '.'): HarnessBuilder {
   builder = builder.flag('coding.auto_test', true);
 
   // Slots
-  builder = builder.slot({ working_dir: workingDir });
+  builder = builder.slot({ working_dir });
 
   return builder;
 }
@@ -140,9 +142,10 @@ export function make_coding(workingDir: string = '.'): HarnessBuilder {
  * - A timeout enforcer (to prevent hung steps)
  * - Safety-related flags
  *
+ * @param _options - Reserved options object for kwargs parity with Python.
  * @returns A HarnessBuilder with reliability capabilities pre-loaded.
  */
-export function make_reliability(): HarnessBuilder {
+export function make_reliability(_options: Record<string, unknown> = {}): HarnessBuilder {
   let builder = new HarnessBuilder();
 
   // Processors
@@ -173,9 +176,10 @@ export function make_reliability(): HarnessBuilder {
  * - A task evaluator (to score the final result)
  * - Evaluation flags
  *
+ * @param _options - Reserved options object for kwargs parity with Python.
  * @returns A HarnessBuilder with evaluation capabilities pre-loaded.
  */
-export function make_evaluation(): HarnessBuilder {
+export function make_evaluation(_options: Record<string, unknown> = {}): HarnessBuilder {
   let builder = new HarnessBuilder();
 
   // Processors
@@ -205,9 +209,10 @@ export function make_evaluation(): HarnessBuilder {
  * - A code modifier (to apply self-improvements)
  * - Evolution flags
  *
+ * @param _options - Reserved options object for kwargs parity with Python.
  * @returns A HarnessBuilder with evolution capabilities pre-loaded.
  */
-export function make_self_improve(): HarnessBuilder {
+export function make_self_improve(_options: Record<string, unknown> = {}): HarnessBuilder {
   let builder = new HarnessBuilder();
 
   // Processors
