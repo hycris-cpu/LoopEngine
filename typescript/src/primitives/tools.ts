@@ -12,6 +12,7 @@
  */
 
 import { ToolResult } from './events';
+import type { State } from './state';
 
 /**
  * The immutable definition of a tool's interface.
@@ -87,13 +88,13 @@ export class ToolSchema {
 export class ToolContext {
   run_id: string;
   step_id: number;
-  state: unknown;
-  sandbox: unknown;
+  state?: State;
+  sandbox?: unknown;
 
   constructor(options: {
     run_id: string;
     step_id: number;
-    state?: unknown;
+    state?: State;
     sandbox?: unknown;
   }) {
     this.run_id = options.run_id;
@@ -147,7 +148,7 @@ export interface Tool {
  */
 export class ToolNotFoundError extends Error {
   /** The name of the tool that wasn't found. */
-  tool_name: string;
+  readonly tool_name: string;
 
   /**
    * Initialize with the missing tool's name.
@@ -191,7 +192,7 @@ export class ToolRegistry {
    *   The ToolSchema extracted from the tool (useful for serialization).
    *
    * Raises:
-   *   ValueError: If a tool with the same name is already registered.
+   *   Error: If a tool with the same name is already registered.
    */
   register(tool: Tool): ToolSchema {
     if (tool.name in this._tools) {
@@ -285,11 +286,6 @@ export class ToolRegistry {
   /** Return the number of registered tools. */
   get length(): number {
     return Object.keys(this._tools).length;
-  }
-
-  /** Support `name in registry` syntax. */
-  contains(name: string): boolean {
-    return name in this._tools;
   }
 
   /**

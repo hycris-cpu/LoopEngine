@@ -20,7 +20,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { Event, Message, ToolResult } from './events';
+import { Event, Message, MessageType, ToolResult } from './events';
 import { StateDelta, StateSnapshot } from './state';
 
 /**
@@ -57,7 +57,7 @@ export class TrajectoryStep {
   constructor(options: Partial<TrajectoryStep> = {}) {
     this.state_before = options.state_before ?? new StateSnapshot();
     this.action = options.action ?? null;
-    this.observations = options.observations ?? [];
+    this.observations = options.observations ? [...options.observations] : [];
     this.reward = options.reward ?? 0.0;
     this.delta = options.delta ?? new StateDelta();
     this.metadata = options.metadata ?? {};
@@ -67,8 +67,7 @@ export class TrajectoryStep {
    * Serialize this step to a dictionary.
    *
    * Converts the step into a JSON-serializable dict. Events are converted
-   * using their own to_dict() methods. The state_before is serialized
-   * using its own to_dict() method for JSONL roundtrip support.
+   * using their own to_dict() methods.
    */
   to_dict(): Record<string, unknown> {
     return {
@@ -178,8 +177,7 @@ export class Trajectory {
   /**
    * Serialize the entire trajectory to a dictionary.
    *
-   * The first line is metadata (task_id, step count, total reward).
-   * Each subsequent line is a serialized step.
+   * Returns a JSON-serializable dict with metadata and all steps.
    */
   to_dict(): Record<string, unknown> {
     return {
@@ -196,6 +194,8 @@ export class Trajectory {
    *
    * JSONL format: one JSON object per line. The first line is the
    * trajectory metadata, and each subsequent line is one step.
+   * Each step is serialized using its to_dict() method for JSONL roundtrip
+   * support.
    *
    * This format is chosen because:
    * - Streaming: you can read one step at a time without loading everything
@@ -315,7 +315,7 @@ export function load_trajectory(path: string): Trajectory {
     const action_data = step_data.action as Record<string, unknown> | null;
     if (action_data !== null && action_data !== undefined) {
       action = new Message({
-        role: (action_data.role as 'system' | 'user' | 'assistant' | 'tool') ?? 'assistant',
+        role: (action_data.role as MessageType) ?? MessageType.ASSISTANT,
         content: (action_data.content as string) ?? '',
         run_id: (action_data.run_id as string) ?? '',
         step_id: (action_data.step_id as number) ?? 0,

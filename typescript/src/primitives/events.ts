@@ -30,8 +30,6 @@ export enum MessageType {
   TOOL = 'tool',
 }
 
-/** The role of a message sender. */
-export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
 
 /**
  * Base class for all events in the system.
@@ -120,7 +118,7 @@ export class ToolCallMetadata {
  *   metadata: Additional structured data (token counts, model info, etc.).
  */
 export class Message extends Event {
-  readonly role: MessageRole;
+  readonly role: MessageType;
   readonly content: string;
   readonly tool_calls: readonly ToolCall[];
   readonly metadata: Record<string, unknown>;
@@ -128,10 +126,10 @@ export class Message extends Event {
 
   constructor(options: Partial<Message> = {}) {
     super(options);
-    this.role = options.role ?? 'user';
+    this.role = options.role ?? MessageType.USER;
     this.content = options.content ?? '';
-    this.tool_calls = options.tool_calls ?? [];
-    this.metadata = options.metadata ?? {};
+    this.tool_calls = options.tool_calls ? [...options.tool_calls] : [];
+    this.metadata = options.metadata ? { ...options.metadata } : {};
   }
 
   /** Serialize to dict, including role, content, and tool calls. */
@@ -183,11 +181,8 @@ export class ToolCall extends Event {
   constructor(options: Partial<ToolCall> = {}) {
     super(options);
     this.name = options.name ?? '';
-    this.input = options.input ?? {};
-    this.id = options.id ?? '';
-    if (!this.id) {
-      this.id = `call_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-    }
+    this.input = options.input ? { ...options.input } : {};
+    this.id = options.id || `call_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
   }
 
   /** Serialize to dict including id, name, and input. */

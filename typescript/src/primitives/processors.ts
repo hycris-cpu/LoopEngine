@@ -38,7 +38,7 @@ import { Event } from './events';
  * 7. step_end:      Leaving the terminal (step complete, observation only)
  * 8. task_end:      Exiting the airport (task complete)
  */
-export const HOOK_POINTS: string[] = [
+export const HOOK_POINTS = [
   'task_start',
   'step_start',
   'before_model',
@@ -47,7 +47,10 @@ export const HOOK_POINTS: string[] = [
   'after_tool',
   'step_end',
   'task_end',
-];
+] as const;
+
+/** The valid hook point names for processors. */
+export type HookPoint = typeof HOOK_POINTS[number];
 
 /**
  * Map an event type to the corresponding hook point name.
@@ -55,8 +58,8 @@ export const HOOK_POINTS: string[] = [
  * This is the "routing" logic that determines which hook an event triggers.
  * Returns None if the event type doesn't map to any hook.
  */
-export function event_to_hook(event: Event): string | null {
-  const mapping: Record<string, string> = {
+export function event_to_hook(event: Event): HookPoint | null {
+  const mapping: Record<string, HookPoint> = {
     task_start: 'task_start',
     step_start: 'step_start',
     before_model: 'before_model',
@@ -116,7 +119,7 @@ export interface Processor {
  *         }
  *     }
  */
-export class MultiHookProcessor {
+export class MultiHookProcessor implements Processor {
   private _name: string;
 
   /** Initialize with a name for this processor. */
@@ -179,7 +182,7 @@ export class MultiHookProcessor {
    * Returns:
    *   A dict mapping hook point name strings to async generator methods.
    */
-  _get_hook_map(): Record<string, (event: Event) => AsyncIterable<Event>> {
+  private _get_hook_map(): Record<HookPoint, (event: Event) => AsyncIterable<Event>> {
     return {
       task_start: (event: Event) => this.on_task_start(event),
       step_start: (event: Event) => this.on_step_start(event),
@@ -207,7 +210,7 @@ export class MultiHookProcessor {
    * Raises:
    *   Error: If hook_point is not a valid hook name.
    */
-  async *dispatch(event: Event, hook_point: string): AsyncGenerator<Event> {
+  async *dispatch(event: Event, hook_point: HookPoint): AsyncGenerator<Event> {
     const hook_map = this._get_hook_map();
     if (!(hook_point in hook_map)) {
       throw new Error(
@@ -228,7 +231,7 @@ export class MultiHookProcessor {
    */
   async *process(event: Event): AsyncGenerator<Event> {
     const hook_map = this._get_hook_map();
-    const hook_fn = hook_map[event.type];
+    const hook_fn = (hook_map as Record<string, (event: Event) => AsyncIterable<Event>>)[event.type];
     if (hook_fn !== undefined) {
       yield* hook_fn(event);
     } else {
