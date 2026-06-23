@@ -23,9 +23,11 @@ export {
 } from './composition';
 
 // Layer 3: Execution
-export type { ModelProvider, Sandbox, SandboxProvider, Task } from './execution';
+export type { ModelProvider } from './execution';
 export { RunResult, run_loop, Harness } from './execution';
+export type { Sandbox, SandboxProvider } from './execution/sandbox';
 export { LocalSandbox, LocalSandboxProvider } from './execution/sandbox';
+export type { Task } from './execution/task';
 export { SimpleTask, BatchTask } from './execution/task';
 
 // Layer 4: Evaluation
