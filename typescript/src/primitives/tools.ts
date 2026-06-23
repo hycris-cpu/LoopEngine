@@ -37,9 +37,14 @@ export class ToolSchema {
   readonly input_schema: Record<string, unknown>;
   readonly metadata: Record<string, unknown>;
 
-  constructor(options: Partial<ToolSchema> = {}) {
-    this.name = options.name ?? '';
-    this.description = options.description ?? '';
+  constructor(options: {
+    name: string;
+    description: string;
+    input_schema?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }) {
+    this.name = options.name;
+    this.description = options.description;
     this.input_schema = options.input_schema ?? {};
     this.metadata = options.metadata ?? {};
   }
@@ -85,11 +90,16 @@ export class ToolContext {
   state: unknown;
   sandbox: unknown;
 
-  constructor(options: Partial<ToolContext> = {}) {
-    this.run_id = options.run_id ?? '';
-    this.step_id = options.step_id ?? 0;
-    this.state = options.state ?? null;
-    this.sandbox = options.sandbox ?? null;
+  constructor(options: {
+    run_id: string;
+    step_id: number;
+    state?: unknown;
+    sandbox?: unknown;
+  }) {
+    this.run_id = options.run_id;
+    this.step_id = options.step_id;
+    this.state = options.state ?? undefined;
+    this.sandbox = options.sandbox ?? undefined;
   }
 }
 
