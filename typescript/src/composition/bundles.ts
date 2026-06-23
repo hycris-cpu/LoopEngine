@@ -26,17 +26,8 @@ import { HarnessBuilder } from './builder';
  * are structurally valid without any behavioral logic.
  */
 class _StubProcessor extends MultiHookProcessor {
-  private _hook: string;
-
-  /**
-   * Initialize with a descriptive name.
-   *
-   * @param name - Human-readable name (e.g., "coding.planner").
-   * @param hook - The hook point this processor is meant for.
-   */
-  constructor(name: string, hook: string = 'step_end') {
+  constructor(name: string) {
     super(name);
-    this._hook = hook;
   }
 }
 
@@ -106,12 +97,12 @@ export function make_coding(options: { working_dir?: string } = {}): HarnessBuil
 
   // Processors
   builder = builder.add(
-    new _StubProcessor('coding.planner', 'before_model'),
+    new _StubProcessor('coding.planner'),
     'before_model',
     -10
   );
   builder = builder.add(
-    new _StubProcessor('coding.patcher', 'after_tool'),
+    new _StubProcessor('coding.patcher'),
     'after_tool',
     0
   );
@@ -150,12 +141,12 @@ export function make_reliability(_options: Record<string, unknown> = {}): Harnes
 
   // Processors
   builder = builder.add(
-    new _StubProcessor('reliability.loop_detector', 'step_end'),
+    new _StubProcessor('reliability.loop_detector'),
     'step_end',
     10
   );
   builder = builder.add(
-    new _StubProcessor('reliability.budget_guard', 'step_start'),
+    new _StubProcessor('reliability.budget_guard'),
     'step_start',
     -10
   );
@@ -184,12 +175,12 @@ export function make_evaluation(_options: Record<string, unknown> = {}): Harness
 
   // Processors
   builder = builder.add(
-    new _StubProcessor('evaluation.step_judge', 'step_end'),
+    new _StubProcessor('evaluation.step_judge'),
     'step_end',
     5
   );
   builder = builder.add(
-    new _StubProcessor('evaluation.task_judge', 'task_end'),
+    new _StubProcessor('evaluation.task_judge'),
     'task_end',
     0
   );
@@ -217,12 +208,12 @@ export function make_self_improve(_options: Record<string, unknown> = {}): Harne
 
   // Processors
   builder = builder.add(
-    new _StubProcessor('evolution.strategy_selector', 'task_start'),
+    new _StubProcessor('evolution.strategy_selector'),
     'task_start',
     0
   );
   builder = builder.add(
-    new _StubProcessor('evolution.code_modifier', 'task_end'),
+    new _StubProcessor('evolution.code_modifier'),
     'task_end',
     10
   );

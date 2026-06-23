@@ -42,7 +42,7 @@ function serialize(value: unknown): string {
 
   const type = typeof value;
   if (type === 'number') {
-    return Number.isFinite(value) ? String(value) : String(value);
+    return String(value);
   }
   if (type === 'string') {
     return JSON.stringify(value);
@@ -200,7 +200,7 @@ export class HarnessConfig {
    */
   validate(): string[] {
     const errors: string[] = [];
-    const validHooks = new Set<string>(HOOK_POINTS as readonly string[]);
+    const validHooks = new Set<string>(HOOK_POINTS);
 
     // Check processor hook points
     const seenCombos = new Set<string>();
@@ -208,7 +208,7 @@ export class HarnessConfig {
       if (!validHooks.has(pe.hook)) {
         errors.push(
           `Processor '${pe.processor.name}' has invalid hook '${pe.hook}'. ` +
-            `Must be one of: ${JSON.stringify(HOOK_POINTS)}.`
+            `Must be one of: [${HOOK_POINTS.map((h) => `'${h}'`).join(', ')}]`
         );
       }
       const combo = `${pe.processor.name}|${pe.hook}|${pe.order}`;

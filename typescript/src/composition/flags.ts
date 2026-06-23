@@ -1,4 +1,4 @@
-import { KeyError } from './errors';
+import { KeyError, ValueError } from './errors';
 
 /**
  * Feature flags let you turn capabilities on and off without changing code.
@@ -48,21 +48,13 @@ export class FeatureFlag {
   constructor(
     name: string,
     defaultValue: boolean = false,
-    value: boolean = false,
+    value: boolean = defaultValue,
     description: string = ''
   ) {
     this.name = name;
     this.default = defaultValue;
     this.value = value;
     this.description = description;
-
-    // Ensure current value starts at the default if not explicitly set.
-    // If value was not explicitly provided, match it to the default.
-    // The default value is False, but if default=True was given and value
-    // was not overridden, value should follow default.
-    if (!this.value && this.default) {
-      this.value = true;
-    }
   }
 
   /**
@@ -114,11 +106,11 @@ export class FlagRegistry {
    *
    * @param flag - The FeatureFlag to register.
    * @returns The registered FeatureFlag.
-   * @throws Error if a flag with the same name is already registered.
+   * @throws ValueError if a flag with the same name is already registered.
    */
   register(flag: FeatureFlag): FeatureFlag {
     if (flag.name in this._flags) {
-      throw new Error(
+      throw new ValueError(
         `Flag '${flag.name}' is already registered. ` +
           'Use set() to change its value or reset() to restore defaults.'
       );
@@ -220,7 +212,7 @@ export function flag(
   defaultValue: boolean = false,
   description: string = ''
 ): FeatureFlag {
-  const f = new FeatureFlag(name, defaultValue, false, description);
+  const f = new FeatureFlag(name, defaultValue, defaultValue, description);
   registry.register(f);
   return f;
 }
