@@ -30,10 +30,12 @@
 
 import type { BenchmarkResult } from '../evaluation/benchmark';
 import type { Harness } from '../execution/harness';
+import type { Task } from '../execution/task';
+import type { RunResult } from '../execution/runloop';
 import { Trajectory } from '../primitives/trajectory';
 import { CodeMod } from './code_mod';
 import { PromotionDecision, PromotionGate } from './promotion';
-import { EvolutionStrategy } from './strategies';
+import type { EvolutionStrategy } from './strategies';
 
 // ---------------------------------------------------------------------------
 // EvolutionReport — the outcome of the entire evolution run
@@ -86,8 +88,7 @@ export class EvolutionReport {
    * Plain English: This is the "executive summary" — a short text
    * that tells you the key results without needing to read the full history.
    *
-   * Returns:
-   *   A formatted multi-line string with the key metrics.
+   * @returns A formatted multi-line string with the key metrics.
    */
   summary(): string {
     const parts = [
@@ -172,13 +173,12 @@ export class LoopEngine {
   /**
    * Initialize the LoopEngine.
    *
-   * Args:
-   *   agent_builder: Callable that takes a config dict and returns a Harness.
-   *   benchmark: A Benchmark instance for measuring performance.
-   *   strategies: List of EvolutionStrategy instances.
-   *   gate: A PromotionGate for validating improvements.
-   *   sandbox: Optional sandbox for testing modifications.
-   *   max_iterations: Maximum improvement iterations (default 100).
+   * @param agent_builder - Callable that takes a config dict and returns a Harness.
+   * @param benchmark - A Benchmark instance for measuring performance.
+   * @param strategies - List of EvolutionStrategy instances.
+   * @param gate - A PromotionGate for validating improvements.
+   * @param sandbox - Optional sandbox for testing modifications.
+   * @param max_iterations - Maximum improvement iterations (default 100).
    */
   constructor(
     agent_builder: (config: Record<string, unknown>) => Harness,
@@ -215,15 +215,12 @@ export class LoopEngine {
    *    f. Record in history
    * 6. Repeat from step 2
    *
-   * Args:
-   *   tasks: Optional list of tasks for the benchmark. If None, uses
-   *          whatever tasks the benchmark was configured with.
-   *   source_files: Dict mapping filename to content. This is the
-   *                "source code" of the agent being improved.
-   *   config: Optional config dict passed to the agent builder.
-   *
-   * Returns:
-   *   An EvolutionReport with the full history and final results.
+   * @param tasks - Optional list of tasks for the benchmark. If omitted, uses
+   *                whatever tasks the benchmark was configured with.
+   * @param source_files - Dict mapping filename to content. This is the
+   *                       "source code" of the agent being improved.
+   * @param config - Optional config dict passed to the agent builder.
+   * @returns An EvolutionReport with the full history and final results.
    */
   async run(
     tasks: unknown[] | null = null,
@@ -232,7 +229,7 @@ export class LoopEngine {
   ): Promise<EvolutionReport> {
     // Initialize tracking state
     const current_source: Record<string, string> = source_files ? { ...source_files } : {};
-    const current_config: Record<string, unknown> = config ? { ...config } : {};
+    let current_config: Record<string, unknown> = config ? { ...config } : {};
 
     const history: Record<string, unknown>[] = [];
     let improvements = 0;
@@ -241,15 +238,9 @@ export class LoopEngine {
     let no_proposals_count = 0;
     const max_no_proposals = 2; // Stop after N consecutive iterations with no proposals
 
-    // _agent_builder and _sandbox are intentionally part of the design even if
-    // not used directly in this simplified implementation.
-    void this._agent_builder;
-    void this._sandbox;
-    void current_config;
-
     for (let iteration = 0; iteration < this._max_iterations; iteration++) {
-      // Step 1: MEASURE — run benchmark on current code
-      const baseline = await this._run_benchmark(tasks);
+      // Step 1: MEASURE — build baseline harness and run benchmark on current code
+      const baseline = await this._run_benchmark(tasks, current_config, current_source);
 
       // Step 2: ANALYZE + PROPOSE — get proposals from strategies
       const proposals = await this._get_proposals(baseline, current_source, current_config);
@@ -294,15 +285,19 @@ export class LoopEngine {
         // Apply mod to get candidate source
         const candidate_source = this._apply_mods([mod], current_source);
 
-        // Run benchmark with candidate source
-        const candidate = await this._run_benchmark(tasks);
+        // Build candidate config with modified source files and sandbox
+        const candidate_config = this._build_candidate_config(current_config, candidate_source);
+
+        // Run benchmark with candidate harness
+        const candidate = await this._run_benchmark(tasks, candidate_config, candidate_source);
 
         // Let the PromotionGate decide
         const decision = await this._gate.validate(baseline, candidate, mod);
 
         if (decision.promoted) {
-          // Promoted! Update the real source
+          // Promoted! Update the real source and config
           Object.assign(current_source, candidate_source);
+          current_config = candidate_config;
           improvements++;
           iteration_promoted = true;
           iteration_score = candidate.aggregate['mean_score'] ?? 0.0;
@@ -336,48 +331,75 @@ export class LoopEngine {
     });
   }
 
-  private async _run_benchmark(tasks: unknown[] | null): Promise<BenchmarkResult> {
-    /**
-     * Run the benchmark to measure current performance.
-     *
-     * Args:
-     *   tasks: Optional tasks for the benchmark.
-     *
-     * Returns:
-     *   A BenchmarkResult with scores and aggregates.
-     */
-    if (tasks !== null) {
-      return this._benchmark.run(tasks);
-    }
+  /**
+   * Run the benchmark to measure current performance.
+   *
+   * Builds a Harness from the supplied config (merged with source files and the
+   * sandbox), runs each task through it, then evaluates the resulting RunResults
+   * with the configured Benchmark. Trajectories from the harness runs are
+   * attached to the returned BenchmarkResult so strategies can analyze them.
+   *
+   * @param tasks - Optional tasks for the benchmark.
+   * @param config - Config dict for the agent builder.
+   * @param source_files - Current source code files used by the agent builder.
+   * @returns A BenchmarkResult with scores and aggregates.
+   */
+  private async _run_benchmark(
+    tasks: unknown[] | null,
+    config: Record<string, unknown>,
+    source_files: Record<string, string>
+  ): Promise<BenchmarkResult> {
+    const taskList = tasks !== null ? tasks : this._resolve_default_tasks();
 
-    // If no tasks provided, try to use the benchmark's built-in tasks
-    if ('tasks' in this._benchmark && Array.isArray((this._benchmark as { tasks: unknown[] }).tasks)) {
-      return this._benchmark.run((this._benchmark as { tasks: unknown[] }).tasks);
-    }
+    // Build a harness from the current config + source files + sandbox
+    const harnessConfig: Record<string, unknown> = {
+      ...config,
+      source_files: { ...source_files },
+      sandbox: this._sandbox,
+    };
+    const harness = this._agent_builder(harnessConfig);
 
-    // Last resort: run with empty task list
-    return this._benchmark.run([]);
+    // Run tasks through the harness to produce RunResults
+    const runResults: RunResult[] = await harness.run_batch(taskList as Task[]);
+
+    // Evaluate the run results with the benchmark
+    const result = await this._benchmark.run(runResults);
+
+    // Preserve trajectories for strategy analysis
+    const trajectories = runResults.map((runResult) => runResult.trajectory);
+    (result as BenchmarkResult & { trajectories: Trajectory[] }).trajectories = trajectories;
+
+    return result;
   }
 
+  /**
+   * Resolve the default task list from the benchmark, if available.
+   *
+   * @returns The benchmark's configured tasks, or an empty list.
+   */
+  private _resolve_default_tasks(): unknown[] {
+    if ('tasks' in this._benchmark && Array.isArray((this._benchmark as { tasks: unknown[] }).tasks)) {
+      return (this._benchmark as { tasks: unknown[] }).tasks;
+    }
+    return [];
+  }
+
+  /**
+   * Collect proposals from all strategies.
+   *
+   * Uses the baseline's first trajectory (if available) for analysis.
+   * If no trajectory is available, passes a minimal one.
+   *
+   * @param baseline - The current benchmark result.
+   * @param source_code - Current source code files.
+   * @param config - Current configuration.
+   * @returns A combined list of CodeMod proposals from all strategies.
+   */
   private async _get_proposals(
     baseline: BenchmarkResult,
     source_code: Record<string, string>,
     config: Record<string, unknown>
   ): Promise<CodeMod[]> {
-    /**
-     * Collect proposals from all strategies.
-     *
-     * Uses the baseline's first trajectory (if available) for analysis.
-     * If no trajectory is available, passes a minimal one.
-     *
-     * Args:
-     *   baseline: The current benchmark result.
-     *   source_code: Current source code files.
-     *   config: Current configuration.
-     *
-     * Returns:
-     *   A combined list of CodeMod proposals from all strategies.
-     */
     // Get a trajectory for analysis (from the first scored task)
     const trajectory = this._extract_trajectory(baseline);
     const eval_result = this._extract_eval_result(baseline);
@@ -395,41 +417,56 @@ export class LoopEngine {
     return all_mods;
   }
 
-  private _extract_trajectory(baseline: BenchmarkResult): unknown {
-    /**
-     * Extract a trajectory from the benchmark result for analysis.
-     *
-     * Args:
-     *   baseline: The benchmark result to extract from.
-     *
-     * Returns:
-     *   A Trajectory object, or an empty one if none available.
-     */
-    // Try to get trajectory from the first scored task
+  /**
+   * Extract a trajectory from the benchmark result for analysis.
+   *
+   * Benchmark runs performed by this engine attach the raw trajectories to the
+   * result object. If that attachment is missing, we fall back to looking for a
+   * trajectory field on any EvalResult.
+   *
+   * @param baseline - The benchmark result to extract from.
+   * @returns A Trajectory object, or an empty one if none available.
+   */
+  private _extract_trajectory(baseline: BenchmarkResult): Trajectory {
+    const extended = baseline as BenchmarkResult & {
+      trajectories?: Trajectory[];
+      details?: { trajectories?: Trajectory[] };
+    };
+
+    // Primary source: trajectories captured by _run_benchmark
+    if (extended.trajectories && extended.trajectories.length > 0) {
+      return extended.trajectories[0];
+    }
+
+    // Secondary source: trajectories stored in result details
+    if (extended.details?.trajectories && extended.details.trajectories.length > 0) {
+      return extended.details.trajectories[0];
+    }
+
+    // Fallback: some EvalResult implementations may carry a trajectory
     for (const eval_result of Object.values(baseline.scores)) {
       if (
         eval_result !== null &&
         typeof eval_result === 'object' &&
-        'trajectory' in eval_result &&
-        (eval_result as { trajectory: unknown }).trajectory instanceof Trajectory
+        'trajectory' in eval_result
       ) {
-        return (eval_result as { trajectory: unknown }).trajectory;
+        const traj = (eval_result as { trajectory: unknown }).trajectory;
+        if (traj instanceof Trajectory) {
+          return traj;
+        }
       }
     }
 
     return new Trajectory();
   }
 
+  /**
+   * Extract the first eval result from the benchmark for strategy use.
+   *
+   * @param baseline - The benchmark result to extract from.
+   * @returns The first EvalResult, or null if none available.
+   */
   private _extract_eval_result(baseline: BenchmarkResult): unknown {
-    /**
-     * Extract the first eval result from the benchmark for strategy use.
-     *
-     * Args:
-     *   baseline: The benchmark result to extract from.
-     *
-     * Returns:
-     *   The first EvalResult, or None if none available.
-     */
     const values = Object.values(baseline.scores);
     if (values.length > 0) {
       return values[0];
@@ -437,23 +474,20 @@ export class LoopEngine {
     return null;
   }
 
+  /**
+   * Apply a list of CodeMods to source files.
+   *
+   * This creates a MODIFIED COPY of the source files — the originals
+   * are not touched until the PromotionGate approves.
+   *
+   * @param mods - List of CodeMods to apply.
+   * @param source_files - Current source code files.
+   * @returns A new dict with the modifications applied.
+   */
   private _apply_mods(
     mods: CodeMod[],
     source_files: Record<string, string>
   ): Record<string, string> {
-    /**
-     * Apply a list of CodeMods to source files.
-     *
-     * This creates a MODIFIED COPY of the source files — the originals
-     * are not touched until the PromotionGate approves.
-     *
-     * Args:
-     *   mods: List of CodeMods to apply.
-     *   source_files: Current source code files.
-     *
-     * Returns:
-     *   A new dict with the modifications applied.
-     */
     // Deep copy so we don't modify the original
     let result = { ...source_files };
 
@@ -464,5 +498,26 @@ export class LoopEngine {
     }
 
     return result;
+  }
+
+  /**
+   * Build a candidate config that includes modified source files.
+   *
+   * This guarantees that the candidate harness receives a different config
+   * than the baseline, even if the agent builder does not directly consume
+   * source_files.
+   *
+   * @param base_config - The current configuration.
+   * @param source_files - The candidate source code files.
+   * @returns A new config dict for the candidate harness.
+   */
+  private _build_candidate_config(
+    base_config: Record<string, unknown>,
+    source_files: Record<string, string>
+  ): Record<string, unknown> {
+    return {
+      ...base_config,
+      source_files: { ...source_files },
+    };
   }
 }

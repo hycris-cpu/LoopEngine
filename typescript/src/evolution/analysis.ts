@@ -35,6 +35,11 @@ const LOW_EFFICIENCY_RATIO = 0.03; // reward-per-step below this → inefficient
 // ---------------------------------------------------------------------------
 
 /**
+ * Severity levels for an Insight.
+ */
+export type InsightSeverity = 'low' | 'medium' | 'high' | 'critical';
+
+/**
  * A structured observation about a trajectory — a "finding" from the tape review.
  *
  * Plain English: An Insight is like a coach's note after watching game tape.
@@ -58,14 +63,14 @@ const LOW_EFFICIENCY_RATIO = 0.03; // reward-per-step below this → inefficient
 export class Insight {
   readonly category: string;
   readonly description: string;
-  readonly severity: string;
+  readonly severity: InsightSeverity;
   readonly evidence: string;
   readonly suggested_fix: string;
 
   constructor(options: Partial<Insight> = {}) {
     this.category = options.category ?? '';
     this.description = options.description ?? '';
-    this.severity = options.severity ?? 'low';
+    this.severity = (options.severity as InsightSeverity) ?? 'low';
     this.evidence = options.evidence ?? '';
     this.suggested_fix = options.suggested_fix ?? '';
   }
@@ -73,8 +78,7 @@ export class Insight {
   /**
    * Serialize this Insight to a plain dictionary.
    *
-   * Returns:
-   *   A dictionary with all Insight fields.
+   * @returns A dictionary with all Insight fields.
    */
   to_dict(): Record<string, unknown> {
     return {
@@ -89,17 +93,14 @@ export class Insight {
   /**
    * Create an Insight from a plain dictionary.
    *
-   * Args:
-   *   d: A dictionary with Insight fields.
-   *
-   * Returns:
-   *   A new Insight instance.
+   * @param d - A dictionary with Insight fields.
+   * @returns A new Insight instance.
    */
   static from_dict(d: Record<string, unknown>): Insight {
     return new Insight({
       category: (d['category'] as string) ?? '',
       description: (d['description'] as string) ?? '',
-      severity: (d['severity'] as string) ?? 'low',
+      severity: (d['severity'] as InsightSeverity) ?? 'low',
       evidence: (d['evidence'] as string) ?? '',
       suggested_fix: (d['suggested_fix'] as string) ?? '',
     });
@@ -130,12 +131,9 @@ export class Insight {
  * 4. INEFFICIENCY CHECK: Are there too many steps for too little reward?
  *    Like writing a 10-page essay when a paragraph would do.
  *
- * Args:
- *   trajectory: The Trajectory to analyze.
- *
- * Returns:
- *   A list of Insights describing patterns found. Empty list means
- *   the trajectory looks healthy.
+ * @param trajectory - The Trajectory to analyze.
+ * @returns A list of Insights describing patterns found. Empty list means
+ *          the trajectory looks healthy.
  */
 export function analyze_trajectory(trajectory: Trajectory): Insight[] {
   if (!trajectory || trajectory.length === 0) {
@@ -172,8 +170,7 @@ function _detect_loops(trajectory: Trajectory): Insight[] {
    * over and over — if it didn't open the first 3 times, try something
    * different!
    *
-   * Returns:
-   *   A list of loop-related Insights (may be empty).
+   * @returns A list of loop-related Insights (may be empty).
    */
   const insights: Insight[] = [];
 
@@ -216,7 +213,7 @@ function _detect_loops(trajectory: Trajectory): Insight[] {
 
   if (max_run_length >= MIN_LOOP_LENGTH) {
     // Determine severity based on loop length
-    const severity = max_run_length >= 7 ? 'high' : 'medium';
+    const severity: InsightSeverity = max_run_length >= 7 ? 'high' : 'medium';
 
     insights.push(
       new Insight({
@@ -243,8 +240,7 @@ function _detect_errors(trajectory: Trajectory): Insight[] {
    * a pattern of errors means the agent is using the wrong tools
    * or approaching the problem incorrectly.
    *
-   * Returns:
-   *   A list of error-related Insights (may be empty).
+   * @returns A list of error-related Insights (may be empty).
    */
   let total_observations = 0;
   let error_observations = 0;
@@ -268,7 +264,7 @@ function _detect_errors(trajectory: Trajectory): Insight[] {
   // Calculate error rate
   const error_rate = total_observations > 0 ? error_observations / total_observations : 0;
 
-  let severity: string;
+  let severity: InsightSeverity;
   if (error_rate > 0.5) {
     severity = 'critical';
   } else if (error_rate > 0.3) {
@@ -299,8 +295,7 @@ function _detect_quality_issues(trajectory: Trajectory): Insight[] {
    * doing things without getting results. Like studying for a test but
    * never actually learning anything.
    *
-   * Returns:
-   *   A list of quality-related Insights (may be empty).
+   * @returns A list of quality-related Insights (may be empty).
    */
   if (trajectory.length === 0) {
     return [];
@@ -314,7 +309,7 @@ function _detect_quality_issues(trajectory: Trajectory): Insight[] {
   }
 
   // Determine severity based on how low the reward is
-  const severity = avg_reward <= 0.0 ? 'high' : 'medium';
+  const severity: InsightSeverity = avg_reward <= 0.0 ? 'high' : 'medium';
 
   return [
     new Insight({
@@ -338,8 +333,7 @@ function _detect_inefficiency(trajectory: Trajectory): Insight[] {
    * A high step count with low reward means the agent is taking the long
    * way around — like writing a 10-page report when a paragraph would do.
    *
-   * Returns:
-   *   A list of inefficiency-related Insights (may be empty).
+   * @returns A list of inefficiency-related Insights (may be empty).
    */
   const step_count = trajectory.length;
   const total_reward = trajectory.total_reward;
@@ -380,11 +374,8 @@ function _detect_inefficiency(trajectory: Trajectory): Insight[] {
  * metrics (error count, action variety) that help you quickly assess
  * performance without reading the full trajectory.
  *
- * Args:
- *   trajectory: The Trajectory to summarize.
- *
- * Returns:
- *   A dict with summary statistics:
+ * @param trajectory - The Trajectory to summarize.
+ * @returns A dict with summary statistics:
  *   - task_id: Which task this was
  *   - total_steps: How many steps the agent took
  *   - total_reward: Sum of all step rewards

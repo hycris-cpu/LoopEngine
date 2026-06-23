@@ -128,11 +128,11 @@ export class PromotionGate {
    * Returns:
    *   A PromotionDecision indicating whether to promote or reject.
    */
-  async validate(
+  validate(
     baseline: BenchmarkResult,
     candidate: BenchmarkResult,
     mods: unknown
-  ): Promise<PromotionDecision> {
+  ): PromotionDecision {
     const details: Record<string, unknown> = {};
 
     // --- Check 1: Safety ---

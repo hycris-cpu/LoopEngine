@@ -70,7 +70,7 @@ export interface EvolutionStrategy {
     eval_result: unknown,
     config: unknown,
     source_code: Record<string, string>
-  ): Promise<CodeMod[]>;
+  ): CodeMod[] | Promise<CodeMod[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -383,12 +383,12 @@ export class ConfigEvolver implements EvolutionStrategy {
    * Returns:
    *   A list of CodeMod proposals targeting config files.
    */
-  async propose(
+  propose(
     trajectory: unknown,
     eval_result: unknown,
     _config: unknown,
     _source_code: Record<string, string>
-  ): Promise<CodeMod[]> {
+  ): CodeMod[] {
     const mods: CodeMod[] = [];
 
     const score =

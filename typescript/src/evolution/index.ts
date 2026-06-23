@@ -1,7 +1,7 @@
 export { CodeMod, CodeModSet, parse_unified_diff } from './code_mod';
 export { Insight, analyze_trajectory, summarize_trajectory } from './analysis';
+export type { EvolutionStrategy } from './strategies';
 export {
-  EvolutionStrategy,
   PromptEvolver,
   ConfigEvolver,
   CompositeEvolutionStrategy,
