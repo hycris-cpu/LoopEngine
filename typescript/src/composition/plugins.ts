@@ -17,8 +17,9 @@
  * by setup/teardown.
  */
 
-import { Processor } from '../primitives/processors';
-import { Tool } from '../primitives/tools';
+import type { Processor } from '../primitives/processors';
+import type { Tool } from '../primitives/tools';
+import { ValueError } from './errors';
 
 /**
  * A single processor entry contributed by a plugin.
@@ -191,11 +192,11 @@ export class PluginLoader {
    * Register a plugin, making it available for lookup.
    *
    * @param plugin - The Plugin instance to register.
-   * @throws Error if a plugin with the same name is already registered.
+   * @throws ValueError if a plugin with the same name is already registered.
    */
   register(plugin: Plugin): void {
     if (plugin.name in this._plugins) {
-      throw new Error(
+      throw new ValueError(
         `Plugin '${plugin.name}' is already registered. ` +
           'Use a different name or unregister first.'
       );

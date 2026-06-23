@@ -16,10 +16,10 @@
  * If there are conflicts (same singleton group), it raises an error.
  */
 
-import { Processor } from '../primitives/processors';
-import { Tool } from '../primitives/tools';
+import type { Processor } from '../primitives/processors';
+import type { Tool } from '../primitives/tools';
 import { HarnessConfig, ProcessorEntry } from './config';
-import { Plugin, PluginProcessorItem } from './plugins';
+import type { Plugin, PluginProcessorItem } from './plugins';
 import { ValueError } from './errors';
 
 /**
@@ -258,7 +258,7 @@ export class HarnessBuilder {
   merge(other: HarnessBuilder): HarnessBuilder {
     if (!(other instanceof HarnessBuilder)) {
       throw new TypeError(
-        `Cannot merge HarnessBuilder with ${Object.prototype.toString.call(other).slice(8, -1)}. Use | only between two HarnessBuilder instances.`
+        `Cannot merge HarnessBuilder with ${Object.prototype.toString.call(other).slice(8, -1)}. Use .merge() only between two HarnessBuilder instances.`
       );
     }
 

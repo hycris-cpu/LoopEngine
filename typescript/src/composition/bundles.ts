@@ -13,8 +13,8 @@
  */
 
 import { MultiHookProcessor } from '../primitives/processors';
-import { Tool, ToolContext } from '../primitives/tools';
-import { ToolResult } from '../primitives/events';
+import type { Tool, ToolContext } from '../primitives/tools';
+import type { ToolResult } from '../primitives/events';
 import { HarnessBuilder } from './builder';
 
 /**
@@ -87,12 +87,17 @@ class _StubTool implements Tool {
  * - Flags for code-aware features
  * - A working directory slot
  *
- * @param options - Options for the coding bundle.
- * @param options.working_dir - The directory where code lives (default: current dir).
+ * @param workingDirOrOptions - Either the working directory path as a string,
+ *   or an options object with an optional `working_dir` field (default: current dir).
  * @returns A HarnessBuilder with coding capabilities pre-loaded.
  */
-export function make_coding(options: { working_dir?: string } = {}): HarnessBuilder {
-  const { working_dir = '.' } = options;
+export function make_coding(
+  workingDirOrOptions?: string | { working_dir?: string }
+): HarnessBuilder {
+  const working_dir =
+    typeof workingDirOrOptions === 'string'
+      ? workingDirOrOptions
+      : (workingDirOrOptions?.working_dir ?? '.');
   let builder = new HarnessBuilder();
 
   // Processors
@@ -133,10 +138,9 @@ export function make_coding(options: { working_dir?: string } = {}): HarnessBuil
  * - A timeout enforcer (to prevent hung steps)
  * - Safety-related flags
  *
- * @param _options - Reserved options object for kwargs parity with Python.
  * @returns A HarnessBuilder with reliability capabilities pre-loaded.
  */
-export function make_reliability(_options: Record<string, unknown> = {}): HarnessBuilder {
+export function make_reliability(): HarnessBuilder {
   let builder = new HarnessBuilder();
 
   // Processors
@@ -167,10 +171,9 @@ export function make_reliability(_options: Record<string, unknown> = {}): Harnes
  * - A task evaluator (to score the final result)
  * - Evaluation flags
  *
- * @param _options - Reserved options object for kwargs parity with Python.
  * @returns A HarnessBuilder with evaluation capabilities pre-loaded.
  */
-export function make_evaluation(_options: Record<string, unknown> = {}): HarnessBuilder {
+export function make_evaluation(): HarnessBuilder {
   let builder = new HarnessBuilder();
 
   // Processors
@@ -200,10 +203,9 @@ export function make_evaluation(_options: Record<string, unknown> = {}): Harness
  * - A code modifier (to apply self-improvements)
  * - Evolution flags
  *
- * @param _options - Reserved options object for kwargs parity with Python.
  * @returns A HarnessBuilder with evolution capabilities pre-loaded.
  */
-export function make_self_improve(_options: Record<string, unknown> = {}): HarnessBuilder {
+export function make_self_improve(): HarnessBuilder {
   let builder = new HarnessBuilder();
 
   // Processors
