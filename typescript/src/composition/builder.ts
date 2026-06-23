@@ -263,15 +263,18 @@ export class HarnessBuilder {
     }
 
     // Check for singleton group conflicts
-    const conflicts: string[] = [];
+    const conflicts = new Set<string>();
     for (const group of this._singletonGroups) {
       if (other._singletonGroups.has(group)) {
-        conflicts.push(group);
+        conflicts.add(group);
       }
     }
-    if (conflicts.length > 0) {
+    if (conflicts.size > 0) {
+      const conflictsStr = conflicts.size === 1
+        ? `{'${Array.from(conflicts)[0]}'}`
+        : `{${Array.from(conflicts).map(c => `'${c}'`).join(', ')}}`;
       throw new ValueError(
-        `Cannot merge builders: singleton group conflict(s) in ${conflicts.join(', ')}. ` +
+        `Cannot merge builders: singleton group conflict(s) in ${conflictsStr}. ` +
           'Both builders have processors claiming the same exclusive role.'
       );
     }
