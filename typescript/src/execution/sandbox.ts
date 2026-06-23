@@ -255,12 +255,18 @@ export class LocalSandbox implements Sandbox {
       }
       return [];
     } catch {
-      // Fallback to Python implementation
-      return this._grep_python(pattern, basePath);
+      // Fallback to pure-TypeScript implementation
+      return this._grepFallback(pattern, basePath);
     }
   }
 
-  private async _grep_python(pattern: string, basePath: string): Promise<string[]> {
+  /**
+   * Pure-TypeScript fallback for searching file contents.
+   *
+   * Walks the directory tree and scans text files line-by-line when the
+   * system `grep` command is unavailable or fails.
+   */
+  private async _grepFallback(pattern: string, basePath: string): Promise<string[]> {
     const results: string[] = [];
     const regex = new RegExp(pattern);
     const textExtensions = new Set([
@@ -384,8 +390,8 @@ export class LocalSandboxProvider implements SandboxProvider {
     return sandbox;
   }
 
-  async release(sandbox: LocalSandbox): Promise<void> {
-    if (this._in_use.has(sandbox)) {
+  async release(sandbox: Sandbox): Promise<void> {
+    if (sandbox instanceof LocalSandbox && this._in_use.has(sandbox)) {
       this._in_use.delete(sandbox);
       this._available.push(sandbox);
     }

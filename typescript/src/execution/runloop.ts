@@ -320,31 +320,23 @@ export async function run_loop(
  * This is the "routing" logic — each event type maps to a specific
  * hook point, and the event is processed through that hook's chain.
  *
- * Note: The returned list of events is currently unused by `run_loop`.
- * It is exposed for future processor chains that may transform events.
- *
  * Args:
  *   event: The event to emit.
  *   hookChains: Mapping from hook point name to ProcessorChain.
  *   state: The current agent state (processors may modify it).
- *
- * Returns:
- *   The list of output events after processing.
  */
 async function _emit_event(
   event: Event,
   hookChains: Record<string, ProcessorChain>,
   state: State
-): Promise<Event[]> {
+): Promise<void> {
   const chain = hookChains[event.type];
   if (chain === undefined) {
-    return [event];
+    return;
   }
-  const outputs: Event[] = [];
-  for await (const out of chain.process(event)) {
-    outputs.push(out);
+  for await (const _ of chain.process(event)) {
+    // Processors may mutate state as a side effect; emitted events are discarded.
   }
-  return outputs;
 }
 
 /**
