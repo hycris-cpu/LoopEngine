@@ -1,0 +1,452 @@
+"""The Sandbox provides a safe execution environment for running code.
+
+Plain English: A Sandbox is like a children's sandbox in a playground —
+a controlled area where you can dig, build, and make messes without
+affecting the rest of the world. In our case, it's where the agent
+runs shell commands, reads/writes files, and executes code.
+
+Three implementations:
+1. LocalSandbox — runs commands on YOUR machine (fast but risky)
+2. (Future) DockerSandbox — runs in a Docker container (safe but slower)
+3. (Future) CloudSandbox — runs in the cloud (scalable but costs money)
+
+SandboxProvider manages sandbox lifecycles — creating, reusing, and
+destroying sandboxes. Think of it as a pool of sandboxes that agents
+can check out and return.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import glob
+import os
+import re
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
+
+
+# ---------------------------------------------------------------------------
+# Sandbox Protocol — the interface all sandboxes must satisfy
+# ---------------------------------------------------------------------------
+
+@runtime_checkable
+class Sandbox(Protocol):
+    """Protocol defining what a sandbox must provide.
+
+    A sandbox is any object that can execute commands and perform file
+    operations in an isolated environment. This Protocol defines the
+    contract that all sandbox implementations must satisfy.
+
+    Think of Sandbox as a "workshop" — it has tools for:
+    - Running commands (exec)
+    - Reading files (read_file)
+    - Writing files (write_file)
+    - Listing directories (list_dir)
+    - Finding files (glob_files)
+    - Searching file contents (grep_files)
+    """
+
+    async def exec(
+        self,
+        command: str,
+        cwd: str = ".",
+        timeout: float = 30,
+    ) -> tuple[str, str, int]:
+        """Execute a shell command and return its output.
+
+        Args:
+            command: The shell command to execute.
+            cwd: Working directory for the command (default: current dir).
+            timeout: Maximum execution time in seconds (default: 30).
+
+        Returns:
+            A tuple of (stdout, stderr, exit_code).
+        """
+        ...
+
+    async def read_file(self, path: str) -> str:
+        """Read the contents of a file.
+
+        Args:
+            path: Path to the file to read.
+
+        Returns:
+            The file contents as a string.
+
+        Raises:
+            FileNotFoundError: If the file doesn't exist.
+        """
+        ...
+
+    async def write_file(self, path: str, content: str) -> None:
+        """Write content to a file, creating parent directories if needed.
+
+        Args:
+            path: Path to the file to write.
+            content: The content to write.
+        """
+        ...
+
+    async def list_dir(self, path: str) -> list[str]:
+        """List the contents of a directory.
+
+        Args:
+            path: Path to the directory to list.
+
+        Returns:
+            A list of entry names (files and directories).
+
+        Raises:
+            FileNotFoundError: If the directory doesn't exist.
+        """
+        ...
+
+    async def glob_files(self, pattern: str, path: str = ".") -> list[str]:
+        """Find files matching a glob pattern.
+
+        Args:
+            pattern: The glob pattern to match (e.g., '*.py', '**/*.txt').
+            path: The directory to search in (default: current dir).
+
+        Returns:
+            A list of matching file paths.
+        """
+        ...
+
+    async def grep_files(
+        self,
+        pattern: str,
+        path: str = ".",
+    ) -> list[str]:
+        """Search for a regex pattern in file contents.
+
+        Args:
+            pattern: The regex pattern to search for.
+            path: The directory to search in (default: current dir).
+
+        Returns:
+            A list of matching lines in "filepath:line_number:content" format.
+        """
+        ...
+
+
+# ---------------------------------------------------------------------------
+# LocalSandbox — runs commands on the host machine
+# ---------------------------------------------------------------------------
+
+class LocalSandbox:
+    """A sandbox that executes directly on the host machine.
+
+    Plain English: This is like working at your own desk — fast and
+    convenient, but anything you do affects your real computer.
+    Use this for development and testing. For production, use
+    DockerSandbox or CloudSandbox instead.
+
+    LocalSandbox uses:
+    - asyncio.create_subprocess_exec for command execution
+    - pathlib for file operations
+    - glob module for pattern matching
+    - grep via subprocess (grep command)
+
+    All operations are async so they don't block the event loop.
+    """
+
+    async def exec(
+        self,
+        command: str,
+        cwd: str = ".",
+        timeout: float = 30,
+    ) -> tuple[str, str, int]:
+        """Execute a shell command on the local machine.
+
+        Uses asyncio.create_subprocess_exec to run the command without
+        blocking the event loop. The command is run through /bin/sh -c
+        to support shell features like pipes and redirects.
+
+        Args:
+            command: The shell command to execute.
+            cwd: Working directory for the command.
+            timeout: Maximum execution time in seconds.
+
+        Returns:
+            A tuple of (stdout, stderr, exit_code).
+
+        Raises:
+            asyncio.TimeoutError: If the command exceeds the timeout.
+        """
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+        )
+
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise
+
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        exit_code = process.returncode or 0
+
+        return stdout, stderr, exit_code
+
+    async def read_file(self, path: str) -> str:
+        """Read the contents of a file on the local filesystem.
+
+        Args:
+            path: Path to the file to read.
+
+        Returns:
+            The file contents as a string.
+
+        Raises:
+            FileNotFoundError: If the file doesn't exist.
+        """
+        file_path = Path(path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        return file_path.read_text(encoding="utf-8")
+
+    async def write_file(self, path: str, content: str) -> None:
+        """Write content to a file on the local filesystem.
+
+        Creates parent directories if they don't exist.
+
+        Args:
+            path: Path to the file to write.
+            content: The content to write.
+        """
+        file_path = Path(path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+
+    async def list_dir(self, path: str) -> list[str]:
+        """List the contents of a directory on the local filesystem.
+
+        Args:
+            path: Path to the directory to list.
+
+        Returns:
+            A sorted list of entry names.
+
+        Raises:
+            FileNotFoundError: If the directory doesn't exist.
+        """
+        dir_path = Path(path)
+        if not dir_path.exists():
+            raise FileNotFoundError(f"Directory not found: {path}")
+        if not dir_path.is_dir():
+            raise NotADirectoryError(f"Not a directory: {path}")
+        return sorted(entry.name for entry in dir_path.iterdir())
+
+    async def glob_files(self, pattern: str, path: str = ".") -> list[str]:
+        """Find files matching a glob pattern on the local filesystem.
+
+        Args:
+            pattern: The glob pattern to match.
+            path: The directory to search in.
+
+        Returns:
+            A sorted list of matching file paths as strings.
+        """
+        base = Path(path)
+        matches = sorted(str(p) for p in base.glob(pattern) if p.is_file())
+        return matches
+
+    async def grep_files(
+        self,
+        pattern: str,
+        path: str = ".",
+    ) -> list[str]:
+        """Search for a regex pattern in file contents.
+
+        Uses the system grep command for efficiency. Falls back to
+        Python regex if grep is not available.
+
+        Args:
+            pattern: The regex pattern to search for.
+            path: The directory to search in.
+
+        Returns:
+            A list of matching lines in "filepath:line_number:content" format.
+        """
+        # Try system grep first (faster for large codebases)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "grep", "-rn", "--include=*.py", "--include=*.txt",
+                "--include=*.md", "--include=*.json", "--include=*.yaml",
+                "--include=*.yml", "--include=*.toml", "--include=*.cfg",
+                "--include=*.sh", "--include=*.js", "--include=*.ts",
+                pattern, path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, _ = await asyncio.wait_for(
+                process.communicate(), timeout=10
+            )
+            if process.returncode == 0:
+                return stdout_bytes.decode("utf-8", errors="replace").strip().split("\n")
+            return []
+        except (FileNotFoundError, asyncio.TimeoutError):
+            # Fallback to Python implementation
+            return await self._grep_python(pattern, path)
+
+    async def _grep_python(self, pattern: str, path: str) -> list[str]:
+        """Python fallback for grep_files when system grep is unavailable.
+
+        Args:
+            pattern: The regex pattern to search for.
+            path: The directory to search in.
+
+        Returns:
+            A list of matching lines in "filepath:line_number:content" format.
+        """
+        import re
+        results: list[str] = []
+        regex = re.compile(pattern)
+
+        base = Path(path)
+        text_extensions = {
+            ".py", ".txt", ".md", ".json", ".yaml", ".yml",
+            ".toml", ".cfg", ".sh", ".js", ".ts",
+        }
+
+        for file_path in base.rglob("*"):
+            if not file_path.is_file():
+                continue
+            if file_path.suffix not in text_extensions:
+                continue
+            try:
+                lines = file_path.read_text(encoding="utf-8", errors="replace").split("\n")
+                for i, line in enumerate(lines, start=1):
+                    if regex.search(line):
+                        results.append(f"{file_path}:{i}:{line}")
+            except (PermissionError, OSError):
+                continue
+
+        return results
+
+
+# ---------------------------------------------------------------------------
+# SandboxProvider Protocol — managing sandbox lifecycles
+# ---------------------------------------------------------------------------
+
+@runtime_checkable
+class SandboxProvider(Protocol):
+    """Protocol for managing sandbox lifecycles.
+
+    Plain English: A SandboxProvider is like a car rental agency.
+    You can:
+    - acquire(): Check out a sandbox (like renting a car)
+    - release(): Return a sandbox (like returning the car)
+    - shutdown(): Close the agency (return all cars, clean up)
+
+    The provider manages a pool of sandboxes for efficiency —
+    creating new ones on demand and reusing returned ones.
+    """
+
+    async def acquire(self) -> Sandbox:
+        """Get a sandbox from the pool.
+
+        Returns:
+            A Sandbox instance ready for use.
+
+        Raises:
+            RuntimeError: If the provider has been shut down.
+        """
+        ...
+
+    async def release(self, sandbox: Sandbox) -> None:
+        """Return a sandbox to the pool for reuse.
+
+        Args:
+            sandbox: The sandbox to return.
+        """
+        ...
+
+    async def shutdown(self) -> None:
+        """Shut down the provider and clean up all sandboxes.
+
+        After shutdown, acquire() will raise RuntimeError.
+        """
+        ...
+
+
+# ---------------------------------------------------------------------------
+# LocalSandboxProvider — manages a pool of LocalSandbox instances
+# ---------------------------------------------------------------------------
+
+class LocalSandboxProvider:
+    """A provider that manages a pool of LocalSandbox instances.
+
+    Plain English: This is like a library that has multiple copies of
+    the same book. When someone needs a book, they check one out.
+    When they return it, it goes back on the shelf for the next person.
+
+    The pool:
+    - Creates sandboxes on demand (lazy initialization)
+    - Reuses returned sandboxes (pool recycling)
+    - Cleans up all sandboxes on shutdown
+
+    This is useful for concurrent task execution — multiple agents
+    can each have their own sandbox without creating/destroying them
+    repeatedly.
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty pool."""
+        self._available: list[LocalSandbox] = []
+        self._in_use: set[LocalSandbox] = set()
+        self._shutdown: bool = False
+
+    async def acquire(self) -> LocalSandbox:
+        """Get a LocalSandbox from the pool.
+
+        If a returned sandbox is available, reuses it. Otherwise,
+        creates a new one.
+
+        Returns:
+            A LocalSandbox instance.
+
+        Raises:
+            RuntimeError: If the provider has been shut down.
+        """
+        if self._shutdown:
+            raise RuntimeError("Cannot acquire sandbox: provider is shut down")
+
+        if self._available:
+            sandbox = self._available.pop()
+        else:
+            sandbox = LocalSandbox()
+
+        self._in_use.add(sandbox)
+        return sandbox
+
+    async def release(self, sandbox: LocalSandbox) -> None:
+        """Return a sandbox to the pool for reuse.
+
+        Args:
+            sandbox: The sandbox to return.
+        """
+        if sandbox in self._in_use:
+            self._in_use.remove(sandbox)
+            self._available.append(sandbox)
+
+    async def shutdown(self) -> None:
+        """Shut down the provider.
+
+        Marks the provider as shut down and clears all pools.
+        After this, acquire() will raise RuntimeError.
+        """
+        self._shutdown = True
+        self._available.clear()
+        self._in_use.clear()
