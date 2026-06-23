@@ -87,17 +87,10 @@ class _StubTool implements Tool {
  * - Flags for code-aware features
  * - A working directory slot
  *
- * @param workingDirOrOptions - Either the working directory path as a string,
- *   or an options object with an optional `working_dir` field (default: current dir).
+ * @param working_dir - The working directory path (default: current dir).
  * @returns A HarnessBuilder with coding capabilities pre-loaded.
  */
-export function make_coding(
-  workingDirOrOptions?: string | { working_dir?: string }
-): HarnessBuilder {
-  const working_dir =
-    typeof workingDirOrOptions === 'string'
-      ? workingDirOrOptions
-      : (workingDirOrOptions?.working_dir ?? '.');
+export function make_coding(working_dir: string = '.'): HarnessBuilder {
   let builder = new HarnessBuilder();
 
   // Processors

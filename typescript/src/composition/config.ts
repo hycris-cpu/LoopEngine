@@ -18,8 +18,9 @@
  */
 
 import { createHash } from 'node:crypto';
-import { Processor, HOOK_POINTS } from '../primitives/processors';
-import { Tool } from '../primitives/tools';
+import { HOOK_POINTS } from '../primitives/processors';
+import type { Processor } from '../primitives/processors';
+import type { Tool } from '../primitives/tools';
 
 /**
  * Serialize a value to a canonical JSON string matching Python's
