@@ -2,28 +2,31 @@ import { describe, test, expect } from 'bun:test';
 import { HarnessBuilder } from '../src/composition/builder';
 import { HarnessConfig, ProcessorEntry } from '../src/composition/config';
 import { MultiHookProcessor } from '../src/primitives/processors';
+import { ToolResult } from '../src/primitives/events';
 
 function makeProcessor(name = 'mock_proc') { return new MultiHookProcessor(name); }
 function makeTool(name = 'mock_tool', description = 'A mock tool') {
-  return { name, description, input_schema: { type: 'object', properties: {} }, async execute() { return null as any; } };
+  return { name, description, input_schema: { type: 'object', properties: {} }, async execute(): Promise<ToolResult> { return new ToolResult({ call_id: 'mock', output: 'ok' }); } };
 }
 
 describe('HarnessBuilder basic', () => {
   test('create empty', () => {
     const builder = new HarnessBuilder();
-    expect((builder as any)._processors).toEqual([]);
-    expect((builder as any)._tools).toEqual([]);
-    expect((builder as any)._flags).toEqual({});
-    expect((builder as any)._slots).toEqual({});
+    const config = builder.build();
+    expect(config.processors).toEqual([]);
+    expect(config.tools).toEqual([]);
+    expect(config.flags).toEqual({});
+    expect(config.slots).toEqual({});
   });
 
   test('add processor', () => {
     const proc = makeProcessor('p1');
     const builder = new HarnessBuilder();
     const builder2 = builder.add(proc, 'step_end', 5);
-    expect((builder as any)._processors).toEqual([]);
-    expect((builder2 as any)._processors.length).toBe(1);
-    const entry = (builder2 as any)._processors[0];
+    expect(builder.build().processors).toEqual([]);
+    const config2 = builder2.build();
+    expect(config2.processors.length).toBe(1);
+    const entry = config2.processors[0];
     expect(entry.processor.name).toBe('p1');
     expect(entry.hook).toBe('step_end');
     expect(entry.order).toBe(5);
@@ -33,7 +36,7 @@ describe('HarnessBuilder basic', () => {
     const proc = makeProcessor('p1');
     const builder = new HarnessBuilder();
     const builder2 = builder.add(proc);
-    const entry = (builder2 as any)._processors[0];
+    const entry = builder2.build().processors[0];
     expect(entry.hook).toBe('step_end');
     expect(entry.order).toBe(0);
   });
@@ -42,35 +45,36 @@ describe('HarnessBuilder basic', () => {
     const tool = makeTool('search');
     const builder = new HarnessBuilder();
     const builder2 = builder.tool(tool as any);
-    expect((builder as any)._tools).toEqual([]);
-    expect((builder2 as any)._tools.length).toBe(1);
-    expect((builder2 as any)._tools[0].name).toBe('search');
+    expect(builder.build().tools).toEqual([]);
+    const config2 = builder2.build();
+    expect(config2.tools.length).toBe(1);
+    expect(config2.tools[0].name).toBe('search');
   });
 
   test('set flag', () => {
     const builder = new HarnessBuilder();
     const builder2 = builder.flag('verbose', true);
-    expect((builder as any)._flags).toEqual({});
-    expect((builder2 as any)._flags).toEqual({ verbose: true });
+    expect(builder.build().flags).toEqual({});
+    expect(builder2.build().flags).toEqual({ verbose: true });
   });
 
   test('set flag default enabled', () => {
     const builder = new HarnessBuilder();
     const builder2 = builder.flag('debug');
-    expect((builder2 as any)._flags).toEqual({ debug: true });
+    expect(builder2.build().flags).toEqual({ debug: true });
   });
 
   test('set flag disabled', () => {
     const builder = new HarnessBuilder();
     const builder2 = builder.flag('verbose', false);
-    expect((builder2 as any)._flags).toEqual({ verbose: false });
+    expect(builder2.build().flags).toEqual({ verbose: false });
   });
 
   test('set slot', () => {
     const builder = new HarnessBuilder();
     const builder2 = builder.slot({ model: 'gpt-4', temperature: 0.7 });
-    expect((builder as any)._slots).toEqual({});
-    expect((builder2 as any)._slots).toEqual({ model: 'gpt-4', temperature: 0.7 });
+    expect(builder.build().slots).toEqual({});
+    expect(builder2.build().slots).toEqual({ model: 'gpt-4', temperature: 0.7 });
   });
 });
 
@@ -102,18 +106,19 @@ describe('HarnessBuilder immutability', () => {
   test('original unchanged after multiple adds', () => {
     const original = new HarnessBuilder();
     original.add(makeProcessor('p1')).tool(makeTool('t1') as any).flag('x');
-    expect((original as any)._processors).toEqual([]);
-    expect((original as any)._tools).toEqual([]);
-    expect((original as any)._flags).toEqual({});
+    const config = original.build();
+    expect(config.processors).toEqual([]);
+    expect(config.tools).toEqual([]);
+    expect(config.flags).toEqual({});
   });
 
   test('branching from same builder', () => {
     const base = new HarnessBuilder();
     const branchA = base.add(makeProcessor('p1'));
     const branchB = base.add(makeProcessor('p2'));
-    expect((branchA as any)._processors[0].processor.name).toBe('p1');
-    expect((branchB as any)._processors[0].processor.name).toBe('p2');
-    expect((base as any)._processors.length).toBe(0);
+    expect(branchA.build().processors[0].processor.name).toBe('p1');
+    expect(branchB.build().processors[0].processor.name).toBe('p2');
+    expect(base.build().processors.length).toBe(0);
   });
 });
 
@@ -159,50 +164,50 @@ describe('HarnessBuilder merge', () => {
     const a = new HarnessBuilder().add(makeProcessor('p1'));
     const b = new HarnessBuilder().add(makeProcessor('p2'));
     const merged = a.merge(b);
-    expect((merged as any)._processors.length).toBe(2);
+    expect(merged.build().processors.length).toBe(2);
   });
 
   test('merge tools', () => {
     const a = new HarnessBuilder().tool(makeTool('search') as any);
     const b = new HarnessBuilder().tool(makeTool('calc') as any);
     const merged = a.merge(b);
-    expect((merged as any)._tools.length).toBe(2);
+    expect(merged.build().tools.length).toBe(2);
   });
 
   test('merge flags', () => {
     const a = new HarnessBuilder().flag('verbose');
     const b = new HarnessBuilder().flag('debug');
     const merged = a.merge(b);
-    expect((merged as any)._flags).toEqual({ verbose: true, debug: true });
+    expect(merged.build().flags).toEqual({ verbose: true, debug: true });
   });
 
   test('merge slots', () => {
     const a = new HarnessBuilder().slot({ model: 'gpt-4' });
     const b = new HarnessBuilder().slot({ temperature: 0.7 });
     const merged = a.merge(b);
-    expect((merged as any)._slots).toEqual({ model: 'gpt-4', temperature: 0.7 });
+    expect(merged.build().slots).toEqual({ model: 'gpt-4', temperature: 0.7 });
   });
 
   test('merge right overrides flag', () => {
     const a = new HarnessBuilder().flag('verbose', true);
     const b = new HarnessBuilder().flag('verbose', false);
     const merged = a.merge(b);
-    expect((merged as any)._flags['verbose']).toBe(false);
+    expect(merged.build().flags['verbose']).toBe(false);
   });
 
   test('merge right overrides slot', () => {
     const a = new HarnessBuilder().slot({ model: 'gpt-4' });
     const b = new HarnessBuilder().slot({ model: 'claude-3' });
     const merged = a.merge(b);
-    expect((merged as any)._slots['model']).toBe('claude-3');
+    expect(merged.build().slots['model']).toBe('claude-3');
   });
 
   test('merge originals unchanged', () => {
     const a = new HarnessBuilder().add(makeProcessor('p1'));
     const b = new HarnessBuilder().add(makeProcessor('p2'));
     a.merge(b);
-    expect((a as any)._processors.length).toBe(1);
-    expect((b as any)._processors.length).toBe(1);
+    expect(a.build().processors.length).toBe(1);
+    expect(b.build().processors.length).toBe(1);
   });
 
   test('merge produces valid config', () => {
@@ -225,7 +230,7 @@ describe('HarnessBuilder merge', () => {
     const b = new HarnessBuilder().add(makeProcessor('p2'));
     const c = new HarnessBuilder().add(makeProcessor('p3'));
     const merged = a.merge(b).merge(c);
-    expect((merged as any)._processors.length).toBe(3);
+    expect(merged.build().processors.length).toBe(3);
   });
 
   test('merge conflict same singleton group throws', () => {

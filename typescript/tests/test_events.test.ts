@@ -3,6 +3,12 @@ import {
   Event, Message, MessageType, ToolCall, ToolResult, EvalResult, ToolCallMetadata,
 } from '../src/primitives/events';
 
+interface OpenAIToolCall {
+  id: string;
+  type: string;
+  function: { name: string; arguments: string };
+}
+
 describe('Event creation', () => {
   test('event has required fields', () => {
     const event = new Event({ type: 'test', run_id: 'r1', step_id: 0, ts: 123.456 });
@@ -41,10 +47,10 @@ describe('Event equality', () => {
 
 describe('MessageType enum', () => {
   test('has all roles', () => {
-    expect(MessageType.SYSTEM).toBe(MessageType.SYSTEM);
-    expect(MessageType.USER).toBe(MessageType.USER);
-    expect(MessageType.ASSISTANT).toBe(MessageType.ASSISTANT);
-    expect(MessageType.TOOL).toBe(MessageType.TOOL);
+    expect(MessageType.SYSTEM as string).toBe('system');
+    expect(MessageType.USER as string).toBe('user');
+    expect(MessageType.ASSISTANT as string).toBe('assistant');
+    expect(MessageType.TOOL as string).toBe('tool');
   });
 
   test('values are strings', () => {
@@ -168,10 +174,11 @@ describe('Serialization', () => {
   test('tool_call to_openai_dict', () => {
     const tc = new ToolCall({ run_id: 'r1', step_id: 0, ts: 1.0, id: 'c1', name: 'search', input: { q: 'hi' } });
     const d = tc.to_openai_dict();
+    const typed = d as unknown as OpenAIToolCall;
     expect(d.id).toBe('c1');
-    expect((d as any).type).toBe('function');
-    expect((d as any).function.name).toBe('search');
-    expect(JSON.parse((d as any).function.arguments)).toEqual({ q: 'hi' });
+    expect(typed.type).toBe('function');
+    expect(typed.function.name).toBe('search');
+    expect(JSON.parse(typed.function.arguments)).toEqual({ q: 'hi' });
   });
 
   test('tool_result to_dict', () => {

@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { HarnessConfig, ProcessorEntry } from '../src/composition/config';
 import { MultiHookProcessor } from '../src/primitives/processors';
+import { ToolResult } from '../src/primitives/events';
 import { createHash } from 'node:crypto';
 
 function makeProcessor(name = 'mock_proc') {
@@ -12,7 +13,7 @@ function makeTool(name = 'mock_tool', description = 'A mock tool') {
     name,
     description,
     input_schema: { type: 'object', properties: {} },
-    async execute() { return null as any; },
+    async execute(): Promise<ToolResult> { return new ToolResult({ call_id: 'mock', output: 'ok' }); },
   };
 }
 
@@ -141,7 +142,7 @@ describe('HarnessConfig', () => {
   });
 
   test('validate tool without name', () => {
-    const tool = { name: '', description: 'something', input_schema: {}, async execute() { return null as any; } };
+    const tool = { name: '', description: 'something', input_schema: {}, async execute(): Promise<ToolResult> { return new ToolResult({ call_id: 'mock', output: 'ok' }); } };
     const config = new HarnessConfig({ tools: [tool as any] });
     const errors = config.validate();
     expect(errors.length).toBeGreaterThan(0);

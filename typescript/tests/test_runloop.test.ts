@@ -57,6 +57,23 @@ class SimpleMockModel implements ModelProvider {
   }
 }
 
+/** Shared mock tool that does nothing — hoisted to module scope to avoid duplication. */
+class NoopTool implements Tool {
+  get name() { return 'noop'; }
+  get description() { return 'Does nothing'; }
+  get input_schema() { return { type: 'object', properties: {} }; }
+  async execute(): Promise<ToolResult> { return new ToolResult({ call_id: 'noop_1', output: 'ok' }); }
+}
+
+/** Shared mock model that always calls the noop tool — hoisted to module scope. */
+class AlwaysCallModel implements ModelProvider {
+  private _toolCall = new ToolCall({ name: 'noop', input: {} });
+  async complete(): Promise<Message> {
+    return new Message({ role: MessageType.ASSISTANT, content: '', tool_calls: [this._toolCall] });
+  }
+  count_tokens() { return 10; }
+}
+
 describe('RunResult', () => {
   test('defaults', () => {
     const result = new RunResult();
@@ -145,21 +162,6 @@ describe('run_loop with tool calls', () => {
 
 describe('run_loop respects max_steps', () => {
   test('stops when limit hit', async () => {
-    class NoopTool implements Tool {
-      get name() { return 'noop'; }
-      get description() { return 'Does nothing'; }
-      get input_schema() { return { type: 'object', properties: {} }; }
-      async execute(): Promise<ToolResult> { return new ToolResult({ call_id: 'noop_1', output: 'ok' }); }
-    }
-
-    const toolCall = new ToolCall({ name: 'noop', input: {} });
-    class AlwaysCallModel implements ModelProvider {
-      async complete(): Promise<Message> {
-        return new Message({ role: MessageType.ASSISTANT, content: '', tool_calls: [toolCall] });
-      }
-      count_tokens() { return 10; }
-    }
-
     const model = new AlwaysCallModel();
     const task = new MockTask({ prompt: 'Do something forever.', max_steps: 3, budget: new Budget({ max_steps: 3 }) });
     const config = new HarnessConfig({ tools: [new NoopTool()] });
@@ -171,21 +173,6 @@ describe('run_loop respects max_steps', () => {
 
 describe('run_loop respects task.is_done', () => {
   test('stops when task signals done', async () => {
-    class NoopTool implements Tool {
-      get name() { return 'noop'; }
-      get description() { return 'Does nothing'; }
-      get input_schema() { return { type: 'object', properties: {} }; }
-      async execute(): Promise<ToolResult> { return new ToolResult({ call_id: 'noop_1', output: 'ok' }); }
-    }
-
-    const toolCall = new ToolCall({ name: 'noop', input: {} });
-    class AlwaysCallModel implements ModelProvider {
-      async complete(): Promise<Message> {
-        return new Message({ role: MessageType.ASSISTANT, content: '', tool_calls: [toolCall] });
-      }
-      count_tokens() { return 10; }
-    }
-
     let stepCounter = 0;
     const doneAfterTwo = (_state: State) => { stepCounter++; return stepCounter >= 2; };
     const model = new AlwaysCallModel();
