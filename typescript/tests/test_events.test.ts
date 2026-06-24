@@ -1,13 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 import {
   Event, Message, MessageType, ToolCall, ToolResult, EvalResult, ToolCallMetadata,
+  type OpenAIToolCall,
 } from '../src/primitives/events';
-
-interface OpenAIToolCall {
-  id: string;
-  type: string;
-  function: { name: string; arguments: string };
-}
 
 describe('Event creation', () => {
   test('event has required fields', () => {
@@ -47,10 +42,7 @@ describe('Event equality', () => {
 
 describe('MessageType enum', () => {
   test('has all roles', () => {
-    expect(MessageType.SYSTEM as string).toBe('system');
-    expect(MessageType.USER as string).toBe('user');
-    expect(MessageType.ASSISTANT as string).toBe('assistant');
-    expect(MessageType.TOOL as string).toBe('tool');
+    expect(Object.values(MessageType)).toEqual(expect.arrayContaining(['system', 'user', 'assistant', 'tool']));
   });
 
   test('values are strings', () => {

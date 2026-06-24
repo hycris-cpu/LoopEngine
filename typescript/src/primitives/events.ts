@@ -14,6 +14,20 @@
 
 import { randomUUID } from 'node:crypto';
 
+/** Typed OpenAI chat-completion message dict. */
+export interface OpenAIMessage {
+  role: string;
+  content: string;
+  tool_calls?: OpenAIToolCall[];
+}
+
+/** Typed OpenAI tool-call dict. */
+export interface OpenAIToolCall {
+  id: string;
+  type: string;
+  function: { name: string; arguments: string };
+}
+
 /**
  * The four "speaking roles" in a conversation.
  *
@@ -149,8 +163,8 @@ export class Message extends Event {
    * This is the format expected by the OpenAI Chat Completions API.
    * Other providers (Anthropic, etc.) may need different conversions.
    */
-  to_openai_dict(): Record<string, unknown> {
-    const d: Record<string, unknown> = {
+  to_openai_dict(): OpenAIMessage {
+    const d: OpenAIMessage = {
       role: this.role,
       content: this.content,
     };
@@ -196,7 +210,7 @@ export class ToolCall extends Event {
   }
 
   /** Convert to OpenAI-compatible tool_call format. */
-  to_openai_dict(): Record<string, unknown> {
+  to_openai_dict(): OpenAIToolCall {
     return {
       id: this.id,
       type: 'function',

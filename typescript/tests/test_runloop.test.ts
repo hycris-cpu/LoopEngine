@@ -129,17 +129,18 @@ describe('run_loop basic flow', () => {
   });
 });
 
+/** Shared mock tool that echoes input — hoisted to module scope to avoid duplication. */
+class EchoTool implements Tool {
+  get name() { return 'echo'; }
+  get description() { return 'Echo the input back'; }
+  get input_schema() { return { type: 'object', properties: { text: { type: 'string' } } }; }
+  async execute(input: Record<string, unknown>): Promise<ToolResult> {
+    return new ToolResult({ call_id: 'call_1', output: (input.text as string) ?? '' });
+  }
+}
+
 describe('run_loop with tool calls', () => {
   test('model calls tool then finishes', async () => {
-    class EchoTool implements Tool {
-      get name() { return 'echo'; }
-      get description() { return 'Echo the input back'; }
-      get input_schema() { return { type: 'function', function: { name: 'echo', description: 'Echo the input back', parameters: { type: 'object', properties: { text: { type: 'string' } } } } }; }
-      async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-        return new ToolResult({ call_id: 'call_1', output: (input.text as string) ?? '' });
-      }
-    }
-
     const toolCall = new ToolCall({ name: 'echo', input: { text: 'hello world' } });
     const step1Response = new Message({ role: MessageType.ASSISTANT, content: '', tool_calls: [toolCall] });
     const step2Response = new Message({ role: MessageType.ASSISTANT, content: 'The echo said: hello world' });
@@ -268,15 +269,6 @@ describe('run_loop processors at hook points', () => {
 
 describe('RunResult fields populated', () => {
   test('fields correct after real run', async () => {
-    class EchoTool implements Tool {
-      get name() { return 'echo'; }
-      get description() { return 'Echo input'; }
-      get input_schema() { return { type: 'object', properties: { text: { type: 'string' } } }; }
-      async execute(input: Record<string, unknown>): Promise<ToolResult> {
-        return new ToolResult({ call_id: 'c1', output: (input.text as string) ?? '' });
-      }
-    }
-
     const toolCall = new ToolCall({ name: 'echo', input: { text: 'hi' } });
     const step1 = new Message({ role: MessageType.ASSISTANT, content: '', tool_calls: [toolCall] });
     const step2 = new Message({ role: MessageType.ASSISTANT, content: 'Done!' });

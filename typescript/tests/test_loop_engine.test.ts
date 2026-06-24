@@ -11,25 +11,33 @@ import { RunResult, type ModelProvider } from '../src/execution/runloop';
 
 describe('LoopEngine creation', () => {
   test('stores components', () => {
+    const mockHarness = {
+      run: async () => new RunResult({ total_steps: 1 }),
+      run_batch: async (tasks: unknown[]) => tasks.map(() => new RunResult({ total_steps: 1 })),
+    };
     const engine = new LoopEngine(
-      () => null as any,
+      () => mockHarness as any,
       { run: async () => new BenchmarkResult() },
       [],
       new PromotionGate(),
       null,
       10,
     );
-    expect((engine as any)._max_iterations).toBe(10);
+    expect(engine.max_iterations).toBe(10);
   });
 
   test('default max_iterations', () => {
+    const mockHarness = {
+      run: async () => new RunResult({ total_steps: 1 }),
+      run_batch: async (tasks: unknown[]) => tasks.map(() => new RunResult({ total_steps: 1 })),
+    };
     const engine = new LoopEngine(
-      () => null as any,
+      () => mockHarness as any,
       { run: async () => new BenchmarkResult() },
       [],
       new PromotionGate(),
     );
-    expect((engine as any)._max_iterations).toBe(100);
+    expect(engine.max_iterations).toBe(100);
   });
 });
 

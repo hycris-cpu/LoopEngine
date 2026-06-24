@@ -30,6 +30,7 @@
 
 import type { BenchmarkResult } from '../evaluation/benchmark';
 import type { Harness } from '../execution/harness';
+import type { Sandbox } from '../execution/sandbox';
 import type { Task } from '../execution/task';
 import type { RunResult } from '../execution/runloop';
 import { Trajectory } from '../primitives/trajectory';
@@ -167,7 +168,7 @@ export class LoopEngine {
   private readonly _benchmark: { run(tasks: unknown[]): Promise<BenchmarkResult> };
   private readonly _strategies: EvolutionStrategy[];
   private readonly _gate: PromotionGate;
-  private readonly _sandbox: unknown;
+  private readonly _sandbox: Sandbox | null;
   private readonly _max_iterations: number;
 
   /**
@@ -185,7 +186,7 @@ export class LoopEngine {
     benchmark: { run(tasks: unknown[]): Promise<BenchmarkResult> },
     strategies: EvolutionStrategy[],
     gate: PromotionGate,
-    sandbox: unknown = null,
+    sandbox: Sandbox | null = null,
     max_iterations: number = 100
   ) {
     this._agent_builder = agent_builder;
@@ -194,6 +195,11 @@ export class LoopEngine {
     this._gate = gate;
     this._sandbox = sandbox;
     this._max_iterations = max_iterations;
+  }
+
+  /** Public read-only access to the configured maximum iterations. */
+  get max_iterations(): number {
+    return this._max_iterations;
   }
 
   /**
