@@ -25,7 +25,7 @@ import { Event, EvalResult, Message, MessageType, ToolCall, ToolResult } from '.
 import { HOOK_POINTS, ProcessorChain } from '../primitives/processors';
 import { State } from '../primitives/state';
 import type { Tool } from '../primitives/tools';
-import { ToolContext } from '../primitives/tools';
+import { ToolContext, ToolSchema } from '../primitives/tools';
 import { Trajectory, TrajectoryStep } from '../primitives/trajectory';
 import type { Task } from './task';
 
@@ -163,8 +163,14 @@ export async function run_loop(
   // Initialize state from the task
   const state = new State({ budget: task.budget });
 
-  // Build tool schemas for the model
-  const toolSchemas = tools.length > 0 ? tools.map((t) => t.input_schema) : null;
+  // Build tool schemas for the model (OpenAI format)
+  const toolSchemas = tools.length > 0
+    ? tools.map((t) => new ToolSchema({
+        name: t.name,
+        description: t.description,
+        input_schema: t.input_schema,
+      }).to_openai_dict())
+    : null;
 
   // Build a tool name → tool mapping for dispatch
   const toolMap: Record<string, Tool> = {};
@@ -197,6 +203,11 @@ export async function run_loop(
   for (let step = 0; step < task.max_steps; step++) {
     state.step = step;
 
+    // Remember how many messages existed before this step so we can count only
+    // the NEW messages it produces. Counting the whole conversation every step
+    // would accumulate tokens quadratically (bug C1).
+    const messagesBeforeStep = state.messages.length;
+
     // 1. step_start — assemble context
     const stepStartEvent = new Event({ type: 'step_start', run_id, step_id: step });
     await _emit_event(stepStartEvent, hookChains, state);
@@ -213,11 +224,6 @@ export async function run_loop(
 
     // Record the assistant message
     state.add_message(assistantMsg);
-
-    // Track token usage
-    const stepTokens = model.count_tokens(state.messages);
-    totalTokens += stepTokens;
-    state.record_usage(stepTokens);
 
     // 4. after_model — processors review the response
     const afterModelEvent = new Event({ type: 'after_model', run_id, step_id: step });
@@ -252,6 +258,14 @@ export async function run_loop(
         await _emit_event(afterToolEvent, hookChains, state);
       }
     }
+
+    // Track token usage for THIS step only — count the messages added since the
+    // step began (assistant message + any tool results), not the entire growing
+    // conversation. This keeps accounting linear (bug C1).
+    const newMessages = state.messages.slice(messagesBeforeStep);
+    const stepTokens = model.count_tokens(newMessages);
+    totalTokens += stepTokens;
+    state.record_usage(stepTokens);
 
     // 6. step_end — record observations
     const stepEndEvent = new Event({ type: 'step_end', run_id, step_id: step });

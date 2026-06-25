@@ -42,16 +42,19 @@ class FeatureFlag:
 
     name: str
     default: bool = False
-    value: bool = False
+    value: bool | None = None
     description: str = ""
 
     def __post_init__(self) -> None:
-        """Ensure current value starts at the default if not explicitly set."""
-        # If value was not explicitly provided, match it to the default.
-        # The dataclass field default is False, but if default=True was given
-        # and value was not overridden, value should follow default.
-        if self.value is False and self.default is True:
-            self.value = True
+        """Ensure current value starts at the default if not explicitly set.
+
+        Uses None as sentinel to distinguish "not provided" from
+        "explicitly set to False". When value is None (not provided),
+        it inherits from default. When value is explicitly True or False,
+        it stays as-is.
+        """
+        if self.value is None:
+            self.value = self.default
 
     @property
     def is_enabled(self) -> bool:

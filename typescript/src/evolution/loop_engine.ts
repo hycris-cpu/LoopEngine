@@ -28,15 +28,19 @@
  * This is the "meta-harness" pattern: the agent that improves agents.
  */
 
-import type { BenchmarkResult } from '../evaluation/benchmark';
-import type { Harness } from '../execution/harness';
-import type { Sandbox } from '../execution/sandbox';
-import type { Task } from '../execution/task';
-import type { RunResult } from '../execution/runloop';
-import { Trajectory } from '../primitives/trajectory';
-import { CodeMod } from './code_mod';
-import { PromotionDecision, PromotionGate } from './promotion';
-import type { EvolutionStrategy } from './strategies';
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import type { BenchmarkResult } from "../evaluation/benchmark";
+import type { Harness } from "../execution/harness";
+import type { Sandbox } from "../execution/sandbox";
+import type { Task } from "../execution/task";
+import type { RunResult } from "../execution/runloop";
+import { Trajectory } from "../primitives/trajectory";
+import { CodeMod } from "./code_mod";
+import { PromotionDecision, PromotionGate } from "./promotion";
+import { CheckpointStore, EvolutionCheckpoint } from "./checkpoint";
+import type { EvolutionStrategy } from "./strategies";
 
 // ---------------------------------------------------------------------------
 // EvolutionReport — the outcome of the entire evolution run
@@ -69,13 +73,15 @@ export class EvolutionReport {
   readonly improvements: number;
   readonly rejections: number;
 
-  constructor(options: {
-    iterations?: number;
-    history?: Record<string, unknown>[];
-    final_score?: number;
-    improvements?: number;
-    rejections?: number;
-  } = {}) {
+  constructor(
+    options: {
+      iterations?: number;
+      history?: Record<string, unknown>[];
+      final_score?: number;
+      improvements?: number;
+      rejections?: number;
+    } = {},
+  ) {
     this.iterations = options.iterations ?? 0;
     this.history = options.history ? [...options.history] : [];
     this.final_score = options.final_score ?? 0.0;
@@ -93,7 +99,7 @@ export class EvolutionReport {
    */
   summary(): string {
     const parts = [
-      '=== Evolution Report ===',
+      "=== Evolution Report ===",
       `Iterations:   ${this.iterations}`,
       `Final Score:  ${this.final_score.toFixed(4)}`,
       `Improvements: ${this.improvements}`,
@@ -101,28 +107,30 @@ export class EvolutionReport {
     ];
 
     if (this.history.length > 0) {
-      parts.push('\n--- Iteration History ---');
+      parts.push("\n--- Iteration History ---");
       for (const entry of this.history) {
-        const iter_num = entry['iteration'] ?? '?';
-        const score = (entry['score'] as number) ?? 0.0;
-        const promoted = Boolean(entry['promoted']);
-        const proposals = (entry['proposals'] as number) ?? 0;
-        const status = promoted ? 'PROMOTED' : 'REJECTED';
+        const iter_num = entry["iteration"] ?? "?";
+        const score = (entry["score"] as number) ?? 0.0;
+        const promoted = Boolean(entry["promoted"]);
+        const proposals = (entry["proposals"] as number) ?? 0;
+        const status = promoted ? "PROMOTED" : "REJECTED";
         parts.push(
-          `  Iter ${iter_num}: score=${score.toFixed(4)}, proposals=${proposals}, status=${status}`
+          `  Iter ${iter_num}: score=${score.toFixed(4)}, proposals=${proposals}, status=${status}`,
         );
       }
     }
 
     if (this.improvements > 0) {
-      const first_score = (this.history[0]?.['score'] as number) ?? 0.0;
+      const first_score = (this.history[0]?.["score"] as number) ?? 0.0;
       const delta = this.final_score - first_score;
-      parts.push(`\nTotal improvement: ${delta >= 0 ? '+' : ''}${delta.toFixed(4)}`);
+      parts.push(
+        `\nTotal improvement: ${delta >= 0 ? "+" : ""}${delta.toFixed(4)}`,
+      );
     } else {
-      parts.push('\nNo improvements were promoted.');
+      parts.push("\nNo improvements were promoted.");
     }
 
-    return parts.join('\n');
+    return parts.join("\n");
   }
 }
 
@@ -165,11 +173,20 @@ export class EvolutionReport {
  */
 export class LoopEngine {
   private readonly _agent_builder: (config: Record<string, unknown>) => Harness;
-  private readonly _benchmark: { run(tasks: unknown[]): Promise<BenchmarkResult> };
+  private readonly _benchmark: {
+    run(
+      runResults: unknown[],
+      tasks?: unknown[] | null,
+    ): Promise<BenchmarkResult>;
+  };
   private readonly _strategies: EvolutionStrategy[];
   private readonly _gate: PromotionGate;
   private readonly _sandbox: Sandbox | null;
   private readonly _max_iterations: number;
+  private readonly _patience: number | null;
+  private _workspace_root: string | null;
+  private _workspace_seq = 0;
+  private readonly _store: CheckpointStore | null;
 
   /**
    * Initialize the LoopEngine.
@@ -180,6 +197,10 @@ export class LoopEngine {
    * @param gate - A PromotionGate for validating improvements.
    * @param sandbox - Optional sandbox for testing modifications.
    * @param max_iterations - Maximum improvement iterations (default 100).
+   * @param patience - Stop after this many consecutive non-promoting iterations.
+   *                   `null` (default) disables the early stop (bug M3).
+   * @param workspace_root - Root under which candidate source is materialized to
+   *                         disk. Defaults to a fresh temp directory (bug C4).
    */
   constructor(
     agent_builder: (config: Record<string, unknown>) => Harness,
@@ -187,7 +208,10 @@ export class LoopEngine {
     strategies: EvolutionStrategy[],
     gate: PromotionGate,
     sandbox: Sandbox | null = null,
-    max_iterations: number = 100
+    max_iterations: number = 100,
+    patience: number | null = null,
+    workspace_root: string | null = null,
+    checkpoint_path: string | null = null,
   ) {
     this._agent_builder = agent_builder;
     this._benchmark = benchmark;
@@ -195,6 +219,9 @@ export class LoopEngine {
     this._gate = gate;
     this._sandbox = sandbox;
     this._max_iterations = max_iterations;
+    this._patience = patience;
+    this._workspace_root = workspace_root;
+    this._store = checkpoint_path ? new CheckpointStore(checkpoint_path) : null;
   }
 
   /** Public read-only access to the configured maximum iterations. */
@@ -231,30 +258,59 @@ export class LoopEngine {
   async run(
     tasks: unknown[] | null = null,
     source_files: Record<string, string> | null = null,
-    config: Record<string, unknown> | null = null
+    config: Record<string, unknown> | null = null,
+    resume: boolean = false,
   ): Promise<EvolutionReport> {
     // Initialize tracking state
-    const current_source: Record<string, string> = source_files ? { ...source_files } : {};
+    let current_source: Record<string, string> = source_files
+      ? { ...source_files }
+      : {};
     let current_config: Record<string, unknown> = config ? { ...config } : {};
 
-    const history: Record<string, unknown>[] = [];
+    let history: Record<string, unknown>[] = [];
     let improvements = 0;
     let rejections = 0;
     let final_score = 0.0;
     let no_proposals_count = 0;
+    let no_promotion_count = 0;
+    let start_iteration = 0;
     const max_no_proposals = 2; // Stop after N consecutive iterations with no proposals
 
-    for (let iteration = 0; iteration < this._max_iterations; iteration++) {
+    // Feature C: resume from a prior checkpoint instead of restarting. The
+    // restored state is carried forward and the loop continues from the
+    // iteration AFTER the last completed one.
+    if (resume && this._store !== null && this._store.exists()) {
+      const cp = this._store.load();
+      if (cp !== null) {
+        history = [...cp.history];
+        if (Object.keys(cp.current_source).length > 0) current_source = { ...cp.current_source };
+        if (Object.keys(cp.current_config).length > 0) current_config = { ...cp.current_config };
+        improvements = cp.improvements;
+        rejections = cp.rejections;
+        final_score = cp.final_score;
+        start_iteration = cp.iteration + 1;
+      }
+    }
+
+    for (let iteration = start_iteration; iteration < this._max_iterations; iteration++) {
       // Step 1: MEASURE — build baseline harness and run benchmark on current code
-      const baseline = await this._run_benchmark(tasks, current_config, current_source);
+      const baseline = await this._run_benchmark(
+        tasks,
+        current_config,
+        current_source,
+      );
 
       // Step 2: ANALYZE + PROPOSE — get proposals from strategies
-      const proposals = await this._get_proposals(baseline, current_source, current_config);
+      const proposals = await this._get_proposals(
+        baseline,
+        current_source,
+        current_config,
+      );
 
       // Step 3: Check if we have any proposals
       if (proposals.length === 0) {
         no_proposals_count++;
-        const score = baseline.aggregate['mean_score'] ?? 0.0;
+        const score = baseline.aggregate["mean_score"] ?? 0.0;
         if (no_proposals_count >= max_no_proposals) {
           // No more proposals from any strategy — done improving
           history.push({
@@ -262,9 +318,10 @@ export class LoopEngine {
             score,
             proposals: 0,
             promoted: false,
-            reason: 'No proposals — stopping.',
+            reason: "No proposals — stopping.",
           });
           final_score = score;
+          this._save_checkpoint(iteration, history, current_source, current_config, improvements, rejections, final_score);
           break;
         } else {
           // Might be transient — record and continue
@@ -273,9 +330,10 @@ export class LoopEngine {
             score,
             proposals: 0,
             promoted: false,
-            reason: 'No proposals from strategies.',
+            reason: "No proposals from strategies.",
           });
           final_score = score;
+          this._save_checkpoint(iteration, history, current_source, current_config, improvements, rejections, final_score);
           continue;
         }
       }
@@ -283,35 +341,75 @@ export class LoopEngine {
       // Reset no-proposals counter
       no_proposals_count = 0;
 
-      // Step 4: TEST + DECIDE — try each proposal
+      // Step 4: TEST + DECIDE.
+      // Safety is checked BEFORE a candidate is ever built or run, so unsafe
+      // code never executes during benchmarking (bug C2). Mods whose diff does
+      // not actually apply are skipped instead of wasting a benchmark (bug M1).
+      // Every promotable candidate is benchmarked and the single BEST one is
+      // promoted — not merely the first that passes (bug M2).
       let iteration_promoted = false;
-      let iteration_score = baseline.aggregate['mean_score'] ?? 0.0;
+      let iteration_score = baseline.aggregate["mean_score"] ?? 0.0;
+      const promotable: Array<{
+        source: Record<string, string>;
+        config: Record<string, unknown>;
+        result: BenchmarkResult;
+      }> = [];
 
       for (const mod of proposals) {
-        // Apply mod to get candidate source
-        const candidate_source = this._apply_mods([mod], current_source);
+        // C2: reject unsafe mods up front — never build or run them.
+        if (!this._is_safe(mod)) {
+          rejections++;
+          continue;
+        }
 
-        // Build candidate config with modified source files and sandbox
-        const candidate_config = this._build_candidate_config(current_config, candidate_source);
+        // M1: apply the mod and skip it if its diff did not land.
+        const [candidate_source, applied] = this._apply_mod_checked(
+          mod,
+          current_source,
+        );
+        if (!applied) {
+          rejections++;
+          continue;
+        }
 
-        // Run benchmark with candidate harness
-        const candidate = await this._run_benchmark(tasks, candidate_config, candidate_source);
-
-        // Let the PromotionGate decide
+        const candidate_config = this._build_candidate_config(
+          current_config,
+          candidate_source,
+        );
+        const candidate = await this._run_benchmark(
+          tasks,
+          candidate_config,
+          candidate_source,
+        );
         const decision = await this._gate.validate(baseline, candidate, mod);
 
         if (decision.promoted) {
-          // Promoted! Update the real source and config
-          Object.assign(current_source, candidate_source);
-          current_config = candidate_config;
-          improvements++;
-          iteration_promoted = true;
-          iteration_score = candidate.aggregate['mean_score'] ?? 0.0;
-          // Only promote one mod per iteration (most impactful)
-          break;
+          promotable.push({
+            source: candidate_source,
+            config: candidate_config,
+            result: candidate,
+          });
         } else {
           rejections++;
         }
+      }
+
+      if (promotable.length > 0) {
+        // M2: promote the highest-scoring promotable candidate.
+        let best = promotable[0];
+        for (const cand of promotable) {
+          if (
+            (cand.result.aggregate["mean_score"] ?? 0.0) >
+            (best.result.aggregate["mean_score"] ?? 0.0)
+          ) {
+            best = cand;
+          }
+        }
+        current_source = best.source;
+        current_config = best.config;
+        improvements++;
+        iteration_promoted = true;
+        iteration_score = best.result.aggregate["mean_score"] ?? 0.0;
       }
 
       // Record iteration history
@@ -321,11 +419,22 @@ export class LoopEngine {
         proposals: proposals.length,
         promoted: iteration_promoted,
         reason: iteration_promoted
-          ? 'Promoted a modification.'
-          : `All ${proposals.length} proposals rejected.`,
+          ? `Promoted the best of ${promotable.length} viable modification(s).`
+          : `No promotable modification among ${proposals.length}.`,
       });
 
       final_score = iteration_score;
+      this._save_checkpoint(iteration, history, current_source, current_config, improvements, rejections, final_score);
+
+      // M3: stop early after `patience` consecutive non-promoting iterations.
+      if (iteration_promoted) {
+        no_promotion_count = 0;
+      } else {
+        no_promotion_count++;
+        if (this._patience !== null && no_promotion_count >= this._patience) {
+          break;
+        }
+      }
     }
 
     return new EvolutionReport({
@@ -353,7 +462,7 @@ export class LoopEngine {
   private async _run_benchmark(
     tasks: unknown[] | null,
     config: Record<string, unknown>,
-    source_files: Record<string, string>
+    source_files: Record<string, string>,
   ): Promise<BenchmarkResult> {
     const taskList = tasks !== null ? tasks : this._resolve_default_tasks();
 
@@ -363,17 +472,35 @@ export class LoopEngine {
       source_files: { ...source_files },
       sandbox: this._sandbox,
     };
+
+    // C4: materialize the source on disk so a builder can actually import and
+    // run the evolved code, then hand the builder the workspace path. Without
+    // this the candidate is behaviourally identical to the baseline and nothing
+    // could ever be promoted.
+    if (Object.keys(source_files).length > 0) {
+      try {
+        harnessConfig["workspace"] = this._materialize(
+          source_files,
+          this._ensure_workspace_root(),
+        );
+      } catch {
+        // Never let a filesystem hiccup abort the evolution run.
+      }
+    }
+
     const harness = this._agent_builder(harnessConfig);
 
     // Run tasks through the harness to produce RunResults
     const runResults: RunResult[] = await harness.run_batch(taskList as Task[]);
 
-    // Evaluate the run results with the benchmark
-    const result = await this._benchmark.run(runResults);
+    // Evaluate the run results with the benchmark, passing the original
+    // tasks so the judge can access task.prompt, task.max_steps, etc.
+    const result = await this._benchmark.run(runResults, taskList);
 
     // Preserve trajectories for strategy analysis
     const trajectories = runResults.map((runResult) => runResult.trajectory);
-    (result as BenchmarkResult & { trajectories: Trajectory[] }).trajectories = trajectories;
+    (result as BenchmarkResult & { trajectories: Trajectory[] }).trajectories =
+      trajectories;
 
     return result;
   }
@@ -384,7 +511,10 @@ export class LoopEngine {
    * @returns The benchmark's configured tasks, or an empty list.
    */
   private _resolve_default_tasks(): unknown[] {
-    if ('tasks' in this._benchmark && Array.isArray((this._benchmark as { tasks: unknown[] }).tasks)) {
+    if (
+      "tasks" in this._benchmark &&
+      Array.isArray((this._benchmark as { tasks: unknown[] }).tasks)
+    ) {
       return (this._benchmark as { tasks: unknown[] }).tasks;
     }
     return [];
@@ -404,7 +534,7 @@ export class LoopEngine {
   private async _get_proposals(
     baseline: BenchmarkResult,
     source_code: Record<string, string>,
-    config: Record<string, unknown>
+    config: Record<string, unknown>,
   ): Promise<CodeMod[]> {
     // Get a trajectory for analysis (from the first scored task)
     const trajectory = this._extract_trajectory(baseline);
@@ -413,7 +543,12 @@ export class LoopEngine {
     const all_mods: CodeMod[] = [];
     for (const strategy of this._strategies) {
       try {
-        const mods = await strategy.propose(trajectory, eval_result, config, source_code);
+        const mods = await strategy.propose(
+          trajectory,
+          eval_result,
+          config,
+          source_code,
+        );
         all_mods.push(...mods);
       } catch {
         // Strategy failed — skip it
@@ -445,7 +580,10 @@ export class LoopEngine {
     }
 
     // Secondary source: trajectories stored in result details
-    if (extended.details?.trajectories && extended.details.trajectories.length > 0) {
+    if (
+      extended.details?.trajectories &&
+      extended.details.trajectories.length > 0
+    ) {
       return extended.details.trajectories[0];
     }
 
@@ -453,8 +591,8 @@ export class LoopEngine {
     for (const eval_result of Object.values(baseline.scores)) {
       if (
         eval_result !== null &&
-        typeof eval_result === 'object' &&
-        'trajectory' in eval_result
+        typeof eval_result === "object" &&
+        "trajectory" in eval_result
       ) {
         const traj = (eval_result as { trajectory: unknown }).trajectory;
         if (traj instanceof Trajectory) {
@@ -490,15 +628,98 @@ export class LoopEngine {
    * @param source_files - Current source code files.
    * @returns A new dict with the modifications applied.
    */
+  /** Persist a resumable checkpoint after an iteration (Feature C). */
+  private _save_checkpoint(
+    iteration: number,
+    history: Record<string, unknown>[],
+    current_source: Record<string, string>,
+    current_config: Record<string, unknown>,
+    improvements: number,
+    rejections: number,
+    final_score: number,
+  ): void {
+    if (this._store === null) return;
+    this._store.save(
+      new EvolutionCheckpoint({
+        iteration,
+        history,
+        current_source,
+        current_config,
+        improvements,
+        rejections,
+        final_score,
+      }),
+    );
+  }
+
+  /**
+   * Return whether a proposed mod passes its own safety check (bug C2).
+   * Mods without an `is_safe` method are treated as safe (defense in depth
+   * lives in the gate and sandbox).
+   */
+  private _is_safe(mod: unknown): boolean {
+    const checker = (mod as { is_safe?: () => boolean }).is_safe;
+    return typeof checker === "function" ? checker.call(mod) : true;
+  }
+
+  /**
+   * Apply one mod, reporting whether it actually landed (bug M1). Prefers
+   * `apply_with_status`; otherwise falls back to best-effort `apply_to`.
+   */
+  private _apply_mod_checked(
+    mod: CodeMod,
+    source_files: Record<string, string>,
+  ): [Record<string, string>, boolean] {
+    const status = (
+      mod as {
+        apply_with_status?: (
+          f: Record<string, string>,
+        ) => [Record<string, string>, boolean];
+      }
+    ).apply_with_status;
+    if (typeof status === "function") {
+      return status.call(mod, source_files);
+    }
+    return [this._apply_mods([mod], source_files), true];
+  }
+
+  /** Lazily create (once per engine) the root for materialized workspaces. */
+  private _ensure_workspace_root(): string {
+    if (this._workspace_root === null) {
+      this._workspace_root = mkdtempSync(join(tmpdir(), "loopengine_ws_"));
+    }
+    return this._workspace_root;
+  }
+
+  /**
+   * Write a source map to a fresh workspace directory under `root` (bug C4).
+   * Each call gets its own numbered subdirectory so candidate and baseline
+   * workspaces never clobber one another. Returns the workspace path.
+   */
+  private _materialize(
+    source_files: Record<string, string>,
+    root: string,
+  ): string {
+    this._workspace_seq += 1;
+    const workspace = join(root, `ws_${this._workspace_seq}`);
+    for (const [relPath, content] of Object.entries(source_files)) {
+      const dest = join(workspace, relPath);
+      mkdirSync(dirname(dest), { recursive: true });
+      writeFileSync(dest, content, "utf-8");
+    }
+    mkdirSync(workspace, { recursive: true });
+    return workspace;
+  }
+
   private _apply_mods(
     mods: CodeMod[],
-    source_files: Record<string, string>
+    source_files: Record<string, string>,
   ): Record<string, string> {
     // Deep copy so we don't modify the original
     let result = { ...source_files };
 
     for (const mod of mods) {
-      if (typeof mod.apply_to === 'function') {
+      if (typeof mod.apply_to === "function") {
         result = mod.apply_to(result);
       }
     }
@@ -519,7 +740,7 @@ export class LoopEngine {
    */
   private _build_candidate_config(
     base_config: Record<string, unknown>,
-    source_files: Record<string, string>
+    source_files: Record<string, string>,
   ): Record<string, unknown> {
     return {
       ...base_config,

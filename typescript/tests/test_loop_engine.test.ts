@@ -104,7 +104,7 @@ describe('LoopEngine run basic', () => {
       },
     };
 
-    const mod = new CodeMod({ target_file: 'prompt.py', description: 'Improve prompt', diff: '...', rationale: 'Agent confused', expected_impact: 'Better score' });
+    const mod = new CodeMod({ target_file: 'prompt.py', description: 'Improve prompt', diff: '--- a/prompt.py\n+++ b/prompt.py\n@@ -1 +1 @@\n-old\n+new\n', rationale: 'Agent confused', expected_impact: 'Better score' });
     const strategy = {
       name: 'test_strategy',
       propose: async () => [mod],
@@ -131,7 +131,7 @@ describe('LoopEngine run basic', () => {
       5,
     );
 
-    const report = await engine.run([{}] as any, { 'prompt.py': 'old' });
+    const report = await engine.run([{}] as any, { 'prompt.py': 'old\n' });
     expect(report).toBeInstanceOf(EvolutionReport);
     expect(report.improvements).toBeGreaterThanOrEqual(1);
     expect(report.iterations).toBeGreaterThanOrEqual(1);
@@ -269,5 +269,89 @@ describe('LoopEngine all rejected', () => {
     const report = await engine.run([{}] as any, {});
     expect(report.improvements).toBe(0);
     expect(report.final_score).toBeCloseTo(0.6);
+  });
+});
+
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+describe('LoopEngine hardening (C2, M2, M3, C4)', () => {
+  const mockHarness = {
+    run: async () => new RunResult({ total_steps: 1 }),
+    run_batch: async (tasks: any[]) => tasks.map(() => new RunResult({ total_steps: 1 })),
+  };
+
+  test('C2: unsafe mod is never built or run', async () => {
+    let builderCalls = 0;
+    const builder = () => { builderCalls++; return mockHarness as any; };
+    const benchmark = {
+      run: async () => new BenchmarkResult({
+        scores: { task_0: new EvalResult({ passed: true, score: 0.5, reason: 'ok' }) },
+        aggregate: { mean_score: 0.5, pass_rate: 1.0 },
+      }),
+    };
+    const unsafe = 'os.' + 'system';
+    const mod = new CodeMod({
+      target_file: 'x.py',
+      diff: `--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n a\n+${unsafe}('echo hi')\n`,
+    });
+    const strategy = { name: 's', propose: async () => [mod] };
+    const gate = { validate: async () => { throw new Error('gate ran on unsafe mod'); } };
+    const engine = new LoopEngine(builder, benchmark as any, [strategy as any], gate as any, null, 1);
+    const report = await engine.run([{}] as any, { 'x.py': 'a\n' });
+    expect(builderCalls).toBe(1);
+    expect(report.improvements).toBe(0);
+    expect(report.rejections).toBeGreaterThanOrEqual(1);
+  });
+
+  test('M2: promotes the highest-scoring candidate, not the first', async () => {
+    const seq = [0.5, 0.6, 0.9, 0.7];
+    let idx = 0;
+    const benchmark = {
+      run: async () => {
+        const s = seq[Math.min(idx, seq.length - 1)];
+        idx++;
+        return new BenchmarkResult({
+          scores: { task_0: new EvalResult({ passed: true, score: s }) },
+          aggregate: { mean_score: s, pass_rate: 1.0 },
+        });
+      },
+    };
+    const mods = [
+      new CodeMod({ target_file: 'x.py', diff: '--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+A\n' }),
+      new CodeMod({ target_file: 'x.py', diff: '--- a/x.py\n+++ b/x.py\n@@ -2 +2 @@\n-b\n+B\n' }),
+      new CodeMod({ target_file: 'x.py', diff: '--- a/x.py\n+++ b/x.py\n@@ -3 +3 @@\n-c\n+C\n' }),
+    ];
+    const strategy = { name: 's', propose: async () => mods };
+    const gate = { validate: async () => new PromotionDecision({ promoted: true, reason: 'ok' }) };
+    const engine = new LoopEngine(() => mockHarness as any, benchmark as any, [strategy as any], gate as any, null, 1);
+    const report = await engine.run([{}] as any, { 'x.py': 'a\nb\nc\n' });
+    expect(report.improvements).toBe(1);
+    expect(report.final_score).toBe(0.9);
+  });
+
+  test('M3: patience stops after consecutive non-promotions', async () => {
+    const benchmark = {
+      run: async () => new BenchmarkResult({
+        scores: { task_0: new EvalResult({ passed: true, score: 0.5 }) },
+        aggregate: { mean_score: 0.5, pass_rate: 1.0 },
+      }),
+    };
+    const mod = new CodeMod({ target_file: 'x.py', diff: '--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+A\n' });
+    const strategy = { name: 's', propose: async () => [mod] };
+    const gate = { validate: async () => new PromotionDecision({ promoted: false, reason: 'no' }) };
+    const engine = new LoopEngine(() => mockHarness as any, benchmark as any, [strategy as any], gate as any, null, 10, 2);
+    const report = await engine.run([{}] as any, { 'x.py': 'a\n' });
+    expect(report.iterations).toBe(2);
+  });
+
+  test('C4: materializes source to an isolated workspace', () => {
+    const engine = new LoopEngine(() => mockHarness as any, { run: async () => new BenchmarkResult() }, [], new PromotionGate());
+    const src = { 'pkg/mod.py': 'print(1)\n', 'top.py': 'x = 2\n' };
+    const root = mkdtempSync(join(tmpdir(), 'le-ws-'));
+    const workspace = (engine as any)._materialize(src, root) as string;
+    expect(readFileSync(join(workspace, 'pkg', 'mod.py'), 'utf-8')).toBe('print(1)\n');
+    expect(readFileSync(join(workspace, 'top.py'), 'utf-8')).toBe('x = 2\n');
   });
 });

@@ -31,6 +31,7 @@ from loopengine.primitives.processors import (
 )
 from loopengine.primitives.state import Budget, State
 from loopengine.primitives.trajectory import Trajectory, TrajectoryStep
+from loopengine.primitives.tools import ToolSchema
 
 # ---------------------------------------------------------------------------
 # Try to import Task and Sandbox from the execution layer.
@@ -224,8 +225,11 @@ async def run_loop(
         budget=task.budget,
     )
 
-    # Build tool schemas for the model
-    tool_schemas = [t.input_schema for t in tools] if tools else None
+    # Build tool schemas for the model (OpenAI format)
+    tool_schemas = [
+        ToolSchema(name=t.name, description=t.description, input_schema=t.input_schema).to_openai_dict()
+        for t in tools
+    ] if tools else None
 
     # Build a tool name → tool mapping for dispatch
     tool_map: dict[str, Any] = {t.name: t for t in tools}
@@ -254,6 +258,11 @@ async def run_loop(
     for step in range(task.max_steps):
         state.step = step
 
+        # Remember how many messages existed before this step so we can count
+        # only the NEW messages it produces. Counting the whole conversation
+        # every step would accumulate tokens quadratically (bug C1).
+        messages_before_step = len(state.messages)
+
         # 1. step_start — assemble context
         step_start_event = Event(type="step_start", run_id=run_id, step_id=step)
         await _emit_event(step_start_event, hook_chains, state)
@@ -273,11 +282,6 @@ async def run_loop(
 
         # Record the assistant message
         state.add_message(assistant_msg)
-
-        # Track token usage
-        step_tokens = model.count_tokens(state.messages)
-        total_tokens += step_tokens
-        state.record_usage(tokens=step_tokens)
 
         # 4. after_model — processors review the response
         after_model_event = Event(type="after_model", run_id=run_id, step_id=step)
@@ -319,6 +323,14 @@ async def run_loop(
         else:
             # No tool calls → natural end of turn
             exit_reason = "end_turn"
+
+        # Track token usage for THIS step only — count the messages added
+        # since the step began (assistant message + any tool results), not the
+        # entire growing conversation. This keeps accounting linear (bug C1).
+        new_messages = state.messages[messages_before_step:]
+        step_tokens = model.count_tokens(new_messages)
+        total_tokens += step_tokens
+        state.record_usage(tokens=step_tokens)
 
         # 6. step_end — record observations
         step_end_event = Event(type="step_end", run_id=run_id, step_id=step)

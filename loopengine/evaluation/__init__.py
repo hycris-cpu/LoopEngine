@@ -33,6 +33,12 @@ from loopengine.evaluation.benchmark import (
     Comparison,
     compare,
 )
+from loopengine.evaluation.grader import (
+    GradeResult,
+    IsolatedGrader,
+    is_better,
+    make_subprocess_runner,
+)
 
 __all__ = [
     # Judges
@@ -51,4 +57,9 @@ __all__ = [
     "BenchmarkResult",
     "Comparison",
     "compare",
+    # Grader (out-of-process scoring)
+    "GradeResult",
+    "IsolatedGrader",
+    "is_better",
+    "make_subprocess_runner",
 ]

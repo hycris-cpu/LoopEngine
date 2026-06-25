@@ -14,15 +14,13 @@
  * cards tells you which subjects improved and which got worse.
  */
 
-import type { EvalResult } from '../primitives/events';
-import { Trajectory } from '../primitives/trajectory';
-import type { Judge } from './judges';
-
+import type { EvalResult } from "../primitives/events";
+import { Trajectory } from "../primitives/trajectory";
+import type { Judge } from "./judges";
 
 // ---------------------------------------------------------------------------
 // BenchmarkResult — the outcome of a benchmark run
 // ---------------------------------------------------------------------------
-
 
 /**
  * The result of running a benchmark — scores for every task plus aggregates.
@@ -43,20 +41,20 @@ export class BenchmarkResult {
   readonly scores: Record<string, EvalResult>;
   readonly aggregate: Record<string, number>;
 
-  constructor(options: {
-    scores?: Record<string, EvalResult>;
-    aggregate?: Record<string, number>;
-  } = {}) {
+  constructor(
+    options: {
+      scores?: Record<string, EvalResult>;
+      aggregate?: Record<string, number>;
+    } = {},
+  ) {
     this.scores = options.scores ? { ...options.scores } : {};
     this.aggregate = options.aggregate ? { ...options.aggregate } : {};
   }
 }
 
-
 // ---------------------------------------------------------------------------
 // Comparison — the diff between two benchmark runs
 // ---------------------------------------------------------------------------
-
 
 /**
  * The difference between two BenchmarkResults — what improved, regressed, or stayed the same.
@@ -81,24 +79,24 @@ export class Comparison {
   readonly unchanged: string[];
   readonly summary: string;
 
-  constructor(options: {
-    improvements?: Record<string, number>;
-    regressions?: Record<string, number>;
-    unchanged?: string[];
-    summary?: string;
-  } = {}) {
+  constructor(
+    options: {
+      improvements?: Record<string, number>;
+      regressions?: Record<string, number>;
+      unchanged?: string[];
+      summary?: string;
+    } = {},
+  ) {
     this.improvements = options.improvements ? { ...options.improvements } : {};
     this.regressions = options.regressions ? { ...options.regressions } : {};
     this.unchanged = options.unchanged ? [...options.unchanged] : [];
-    this.summary = options.summary ?? '';
+    this.summary = options.summary ?? "";
   }
 }
-
 
 // ---------------------------------------------------------------------------
 // Benchmark — runs agent on multiple tasks and collects results
 // ---------------------------------------------------------------------------
-
 
 /**
  * Runs the agent on multiple tasks and produces a BenchmarkResult.
@@ -144,44 +142,73 @@ export class Benchmark {
   }
 
   /**
-   * Run all tasks through the judge and produce a BenchmarkResult.
+   * Run all run results through the judge and produce a BenchmarkResult.
+   *
+   * When ``tasks`` is provided, the original Task objects are passed to the
+   * judge (which needs ``task.prompt``, ``task.max_steps``, etc.). When
+   * ``tasks`` is undefined, the run result itself is passed — this preserves
+   * backward compatibility for callers that pass Task objects directly.
    *
    * Steps:
-   * 1. For each task, evaluate its trajectory with the judge
+   * 1. For each run result, extract its trajectory and evaluate with the judge
    * 2. Collect all EvalResults
    * 3. Compute aggregate statistics (mean score, pass rate)
    * 4. Return a frozen BenchmarkResult
    *
-   * @param tasks - A list of Task objects to evaluate.
+   * @param runResults - A list of RunResult objects (or Task objects with a
+   *                     ``trajectory`` attribute) to evaluate.
+   * @param tasks - Optional list of original Task objects, one per run result.
+   *                When provided, these are passed to the judge instead of the
+   *                run results.
    * @returns A BenchmarkResult with individual scores and aggregates.
    */
-  async run(tasks: unknown[]): Promise<BenchmarkResult> {
+  async run(
+    runResults: unknown[],
+    tasks?: unknown[] | null,
+  ): Promise<BenchmarkResult> {
     const scores: Record<string, EvalResult> = {};
 
-    // Evaluate each task
+    // Pair each run result with its original task (if provided)
+    const paired: [unknown, unknown][] = runResults.map((runResult, i) => [
+      runResult,
+      tasks && i < tasks.length ? tasks[i] : runResult,
+    ]);
+
+    // Evaluate each pair
     if (this._parallelism <= 1) {
       // Sequential mode
-      for (let i = 0; i < tasks.length; i++) {
-        const task = tasks[i];
+      for (let i = 0; i < paired.length; i++) {
+        const [runResult, originalTask] = paired[i];
         const task_id = `task_${i}`;
-        const trajectory = _get_trajectory(task);
-        const result = await this._judge.evaluate(trajectory, task);
+        const trajectory = _get_trajectory(runResult);
+        const result = await this._judge.evaluate(trajectory, originalTask);
         scores[task_id] = result;
       }
     } else {
       // Parallel mode
-      const eval_one = async (index: number, task: unknown): Promise<[string, EvalResult]> => {
+      const eval_one = async (
+        index: number,
+        runResult: unknown,
+        originalTask: unknown,
+      ): Promise<[string, EvalResult]> => {
         const task_id = `task_${index}`;
-        const trajectory = _get_trajectory(task);
-        const result = await this._judge.evaluate(trajectory, task);
+        const trajectory = _get_trajectory(runResult);
+        const result = await this._judge.evaluate(trajectory, originalTask);
         return [task_id, result];
       };
 
       // Run in batches of parallelism
-      for (let batch_start = 0; batch_start < tasks.length; batch_start += this._parallelism) {
-        const batch = tasks.slice(batch_start, batch_start + this._parallelism);
+      for (
+        let batch_start = 0;
+        batch_start < paired.length;
+        batch_start += this._parallelism
+      ) {
+        const batch = paired.slice(
+          batch_start,
+          batch_start + this._parallelism,
+        );
         const batch_results = await Promise.all(
-          batch.map((task, i) => eval_one(batch_start + i, task)),
+          batch.map(([rr, ot], i) => eval_one(batch_start + i, rr, ot)),
         );
         for (const [task_id, result] of batch_results) {
           scores[task_id] = result;
@@ -196,11 +223,9 @@ export class Benchmark {
   }
 }
 
-
 // ---------------------------------------------------------------------------
 // compare() — diff two benchmark results
 // ---------------------------------------------------------------------------
-
 
 /**
  * Compare two BenchmarkResults and produce a diff report.
@@ -224,7 +249,10 @@ export function compare(a: BenchmarkResult, b: BenchmarkResult): Comparison {
   const unchanged: string[] = [];
 
   // Compare individual task scores
-  const all_tasks = new Set([...Object.keys(a.scores), ...Object.keys(b.scores)]);
+  const all_tasks = new Set([
+    ...Object.keys(a.scores),
+    ...Object.keys(b.scores),
+  ]);
   for (const task_id of [...all_tasks].sort()) {
     const score_a = task_id in a.scores ? a.scores[task_id].score : 0.0;
     const score_b = task_id in b.scores ? b.scores[task_id].score : 0.0;
@@ -241,15 +269,15 @@ export function compare(a: BenchmarkResult, b: BenchmarkResult): Comparison {
   }
 
   // Build summary
-  const mean_a = a.aggregate['mean_score'] ?? 0.0;
-  const mean_b = b.aggregate['mean_score'] ?? 0.0;
-  const pass_rate_a = a.aggregate['pass_rate'] ?? 0.0;
-  const pass_rate_b = b.aggregate['pass_rate'] ?? 0.0;
+  const mean_a = a.aggregate["mean_score"] ?? 0.0;
+  const mean_b = b.aggregate["mean_score"] ?? 0.0;
+  const pass_rate_a = a.aggregate["pass_rate"] ?? 0.0;
+  const pass_rate_b = b.aggregate["pass_rate"] ?? 0.0;
 
   const summary_parts = [
-    'Benchmark comparison:',
-    `  Mean score: ${mean_a.toFixed(2)} → ${mean_b.toFixed(2)} (delta: ${(mean_b - mean_a) >= 0 ? '+' : ''}${(mean_b - mean_a).toFixed(2)})`,
-    `  Pass rate:  ${pass_rate_a.toFixed(2)} → ${pass_rate_b.toFixed(2)} (delta: ${(pass_rate_b - pass_rate_a) >= 0 ? '+' : ''}${(pass_rate_b - pass_rate_a).toFixed(2)})`,
+    "Benchmark comparison:",
+    `  Mean score: ${mean_a.toFixed(2)} → ${mean_b.toFixed(2)} (delta: ${mean_b - mean_a >= 0 ? "+" : ""}${(mean_b - mean_a).toFixed(2)})`,
+    `  Pass rate:  ${pass_rate_a.toFixed(2)} → ${pass_rate_b.toFixed(2)} (delta: ${pass_rate_b - pass_rate_a >= 0 ? "+" : ""}${(pass_rate_b - pass_rate_a).toFixed(2)})`,
     `  Tasks improved:   ${Object.keys(improvements).length}`,
     `  Tasks regressed:  ${Object.keys(regressions).length}`,
     `  Tasks unchanged:  ${unchanged.length}`,
@@ -270,15 +298,13 @@ export function compare(a: BenchmarkResult, b: BenchmarkResult): Comparison {
     improvements,
     regressions,
     unchanged,
-    summary: summary_parts.join('\n'),
+    summary: summary_parts.join("\n"),
   });
 }
-
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
 
 /**
  * Extract a trajectory from a task or RunResult.
@@ -292,8 +318,8 @@ export function compare(a: BenchmarkResult, b: BenchmarkResult): Comparison {
 function _get_trajectory(task: unknown): Trajectory {
   if (
     task !== null &&
-    typeof task === 'object' &&
-    'trajectory' in task &&
+    typeof task === "object" &&
+    "trajectory" in task &&
     task.trajectory instanceof Trajectory
   ) {
     return task.trajectory;
@@ -301,14 +327,15 @@ function _get_trajectory(task: unknown): Trajectory {
   return new Trajectory();
 }
 
-
 /**
  * Compute aggregate statistics from a dict of EvalResults.
  *
  * @param scores - Dict mapping task_id to EvalResult.
  * @returns A dict with 'mean_score' and 'pass_rate'.
  */
-function _compute_aggregate(scores: Record<string, EvalResult>): Record<string, number> {
+function _compute_aggregate(
+  scores: Record<string, EvalResult>,
+): Record<string, number> {
   const values = Object.values(scores);
   if (values.length === 0) {
     return { mean_score: 0.0, pass_rate: 0.0 };

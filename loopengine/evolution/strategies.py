@@ -28,52 +28,29 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------
-# Import CodeMod and Insight from sibling modules.
-# If the other agent hasn't built them yet, use minimal stubs.
+# Import dependencies directly from sibling modules.
+#
+# These were once wrapped in try/except ImportError with stub fallbacks.
+# The stubs were dangerous: the CodeMod stub reported is_safe()=True
+# unconditionally, so a real import failure would *silently* disable
+# every safety check. We now import directly — a broken import fails
+# loud instead of degrading to approve-everything (bug C3).
 # ---------------------------------------------------------------------------
 
-try:
-    from loopengine.evolution.code_mod import CodeMod, CodeModSet
-except ImportError:
-    @dataclass(frozen=True)
-    class CodeMod:
-        """Stub CodeMod — replaced when code_mod.py is built."""
-        target_file: str = ""
-        description: str = ""
-        diff: str = ""
-        rationale: str = ""
-        expected_impact: str = ""
-
-        def to_dict(self) -> dict[str, Any]:
-            return {
-                "target_file": self.target_file,
-                "description": self.description,
-                "diff": self.diff,
-                "rationale": self.rationale,
-                "expected_impact": self.expected_impact,
-            }
-
-        def is_safe(self) -> bool:
-            return True
-
-    @dataclass(frozen=True)
-    class CodeModSet:
-        """Stub CodeModSet — replaced when code_mod.py is built."""
-        mods: tuple[CodeMod, ...] = ()
-
-        def is_safe(self) -> bool:
-            return all(m.is_safe() for m in self.mods)
-
-        def apply_to(self, files: dict[str, str]) -> dict[str, str]:
-            return files
-
+from loopengine.evolution.code_mod import CodeMod, CodeModSet
 
 try:
     from loopengine.evolution.analysis import Insight, analyze_trajectory
 except ImportError:
+    # analysis.py is a pure computation module — if it can't load, we can
+    # still function without trajectory insights. Define minimal safe stubs
+    # that return empty results (not dangerous "approve everything" stubs).
+    from dataclasses import dataclass, field
+    from typing import Any
+
     @dataclass(frozen=True)
     class Insight:
-        """Stub Insight — replaced when analysis.py is built."""
+        """Stub Insight when analysis.py is unavailable — returns empty data."""
         category: str = ""
         description: str = ""
         severity: str = "low"
@@ -81,22 +58,17 @@ except ImportError:
         suggested_fix: str = ""
 
     def analyze_trajectory(trajectory: Any) -> list[Insight]:
-        """Stub — replaced when analysis.py is built."""
+        """Stub — no insights available when analysis module is missing."""
         return []
-
-
-# ---------------------------------------------------------------------------
-# Import ModelProvider from the execution layer
-# ---------------------------------------------------------------------------
 
 try:
     from loopengine.execution.runloop import ModelProvider
 except ImportError:
-    from typing import Protocol as _Protocol
+    from typing import Protocol as _Protocol, runtime_checkable
 
     @runtime_checkable
     class ModelProvider(_Protocol):  # type: ignore[no-redef]
-        """Stub ModelProvider — replaced when runloop.py is built."""
+        """Stub ModelProvider when runloop.py is unavailable."""
         async def complete(self, messages: list[Any], tools: list[Any] | None = None) -> Any: ...
         def count_tokens(self, messages: list[Any]) -> int: ...
 
@@ -445,10 +417,15 @@ class ConfigEvolver:
         score = getattr(eval_result, "score", 0.0) if eval_result else 0.0
         step_count = len(trajectory.steps) if hasattr(trajectory, "steps") else 0
 
+        # Target a config file that actually exists in the source map. A
+        # hard-coded "config.py" is usually absent, so the mod could never apply
+        # (bug M4).
+        target = self._pick_target(source_code)
+
         # Heuristic 1: Low score → suggest budget increase
         if score < self._score_threshold:
             mods.append(CodeMod(
-                target_file="config.py",
+                target_file=target,
                 description="Increase budget due to low score",
                 diff=self._budget_diff(trajectory),
                 rationale=(
@@ -461,7 +438,7 @@ class ConfigEvolver:
         # Heuristic 2: Too many steps → suggest efficiency improvements
         if step_count > self._step_threshold:
             mods.append(CodeMod(
-                target_file="config.py",
+                target_file=target,
                 description="Enable efficiency flags due to excessive steps",
                 diff=self._efficiency_diff(),
                 rationale=(
@@ -475,7 +452,7 @@ class ConfigEvolver:
         tool_errors = self._count_tool_errors(trajectory)
         if tool_errors > 2:
             mods.append(CodeMod(
-                target_file="config.py",
+                target_file=target,
                 description="Add error recovery due to tool failures",
                 diff=self._error_recovery_diff(),
                 rationale=(
@@ -486,6 +463,21 @@ class ConfigEvolver:
             ))
 
         return mods
+
+    def _pick_target(self, source_code: dict[str, str]) -> str:
+        """Choose a config file to target from the actual source map.
+
+        Prefers a file whose name looks config-related; otherwise falls back to
+        any available file, and finally to a bare ``config.py`` when the source
+        map is empty (bug M4).
+        """
+        if source_code:
+            for name in source_code:
+                lowered = name.lower()
+                if "config" in lowered or "settings" in lowered:
+                    return name
+            return next(iter(source_code))
+        return "config.py"
 
     def _budget_diff(self, trajectory: Any) -> str:
         """Generate a diff that increases the budget.

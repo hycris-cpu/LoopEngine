@@ -11,29 +11,30 @@ that the parts fit together like puzzle pieces.
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 import loopengine as le
-from loopengine.primitives.events import Event, Message, MessageType
-from loopengine.primitives.state import Budget, State
-from loopengine.primitives.trajectory import Trajectory, TrajectoryStep, load_trajectory
-from loopengine.primitives.tools import ToolSchema, ToolRegistry, ToolContext
-from loopengine.primitives.processors import MultiHookProcessor, ProcessorChain
 from loopengine.composition.builder import HarnessBuilder
 from loopengine.composition.config import HarnessConfig
-from loopengine.execution.runloop import ModelProvider, RunResult, run_loop
-from loopengine.execution.harness import Harness
-from loopengine.execution.task import SimpleTask
 from loopengine.evaluation.benchmark import BenchmarkResult, compare
+from loopengine.evolution.analysis import Insight, analyze_trajectory
 from loopengine.evolution.code_mod import CodeMod, CodeModSet
-from loopengine.evolution.analysis import analyze_trajectory, Insight
-from loopengine.evolution.promotion import PromotionGate, PromotionDecision
-
+from loopengine.evolution.promotion import PromotionDecision, PromotionGate
+from loopengine.execution.harness import Harness
+from loopengine.execution.runloop import ModelProvider, RunResult, run_loop
+from loopengine.execution.task import SimpleTask
+from loopengine.primitives.events import Event, Message, MessageType
+from loopengine.primitives.processors import MultiHookProcessor, ProcessorChain
+from loopengine.primitives.state import Budget, State
+from loopengine.primitives.tools import ToolContext, ToolRegistry, ToolSchema
+from loopengine.primitives.trajectory import Trajectory, TrajectoryStep, load_trajectory
 
 # ---------------------------------------------------------------------------
 # BDD: Building an agent from scratch using the builder pattern
 # ---------------------------------------------------------------------------
+
 
 class TestBuilderToHarnessIntegration:
     """BDD: Given a user who wants to build a coding agent,
@@ -62,8 +63,11 @@ class TestBuilderToHarnessIntegration:
         mock_model = AsyncMock(spec=ModelProvider)
         mock_model.complete = AsyncMock(
             return_value=Message(
-                type="message", run_id="r", step_id=0,
-                role="assistant", content="Done!",
+                type="message",
+                run_id="r",
+                step_id=0,
+                role="assistant",
+                content="Done!",
             )
         )
         mock_model.count_tokens = MagicMock(return_value=10)
@@ -79,6 +83,7 @@ class TestBuilderToHarnessIntegration:
 # BDD: Running a task through the full execution pipeline
 # ---------------------------------------------------------------------------
 
+
 class TestRunLoopIntegration:
     """BDD: Given an agent with a mock model,
     When we run a task through the run loop,
@@ -90,8 +95,11 @@ class TestRunLoopIntegration:
         model = AsyncMock(spec=ModelProvider)
         model.complete = AsyncMock(
             return_value=Message(
-                type="message", run_id="test", step_id=0,
-                role="assistant", content="I'll help with that.",
+                type="message",
+                run_id="test",
+                step_id=0,
+                role="assistant",
+                content="I'll help with that.",
             )
         )
         model.count_tokens = MagicMock(return_value=10)
@@ -129,6 +137,7 @@ class TestRunLoopIntegration:
 # BDD: Evaluation pipeline — from trajectory to score
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluationIntegration:
     """BDD: Given a completed trajectory,
     When we evaluate it with judges,
@@ -141,12 +150,22 @@ class TestEvaluationIntegration:
         baseline = BenchmarkResult(
             scores={
                 "task1": le.EvalResult(
-                    type="eval", run_id="r", step_id=0,
-                    passed=True, score=0.6, reason="ok", reward=0.6,
+                    type="eval",
+                    run_id="r",
+                    step_id=0,
+                    passed=True,
+                    score=0.6,
+                    reason="ok",
+                    reward=0.6,
                 ),
                 "task2": le.EvalResult(
-                    type="eval", run_id="r", step_id=0,
-                    passed=True, score=0.4, reason="ok", reward=0.4,
+                    type="eval",
+                    run_id="r",
+                    step_id=0,
+                    passed=True,
+                    score=0.4,
+                    reason="ok",
+                    reward=0.4,
                 ),
             },
             aggregate={"mean_score": 0.5},
@@ -154,12 +173,22 @@ class TestEvaluationIntegration:
         candidate = BenchmarkResult(
             scores={
                 "task1": le.EvalResult(
-                    type="eval", run_id="r", step_id=0,
-                    passed=True, score=0.8, reason="better", reward=0.8,
+                    type="eval",
+                    run_id="r",
+                    step_id=0,
+                    passed=True,
+                    score=0.8,
+                    reason="better",
+                    reward=0.8,
                 ),
                 "task2": le.EvalResult(
-                    type="eval", run_id="r", step_id=0,
-                    passed=True, score=0.3, reason="worse", reward=0.3,
+                    type="eval",
+                    run_id="r",
+                    step_id=0,
+                    passed=True,
+                    score=0.3,
+                    reason="worse",
+                    reward=0.3,
                 ),
             },
             aggregate={"mean_score": 0.55},
@@ -175,6 +204,7 @@ class TestEvaluationIntegration:
 # ---------------------------------------------------------------------------
 # BDD: Evolution pipeline — trajectory analysis → CodeMod → promotion
 # ---------------------------------------------------------------------------
+
 
 class TestEvolutionIntegration:
     """BDD: Given a trajectory with poor performance,
@@ -194,13 +224,19 @@ class TestEvolutionIntegration:
             step = TrajectoryStep(
                 state_before=snap,
                 action=Message(
-                    type="message", run_id="r", step_id=i,
-                    role="assistant", content="search(query)",
+                    type="message",
+                    run_id="r",
+                    step_id=i,
+                    role="assistant",
+                    content="search(query)",
                 ),
                 observations=(
                     le.ToolResult(
-                        type="tool_result", run_id="r", step_id=i,
-                        call_id=f"tc_{i}", output="same result",
+                        type="tool_result",
+                        run_id="r",
+                        step_id=i,
+                        call_id=f"tc_{i}",
+                        output="same result",
                     ),
                 ),
                 reward=0.1,
@@ -244,23 +280,39 @@ class TestEvolutionIntegration:
         gate = PromotionGate(min_improvement=0.05, no_regression=0.1)
 
         baseline = BenchmarkResult(
-            scores={"t1": le.EvalResult(
-                type="eval", run_id="r", step_id=0,
-                passed=True, score=0.5, reason="ok", reward=0.5,
-            )},
+            scores={
+                "t1": le.EvalResult(
+                    type="eval",
+                    run_id="r",
+                    step_id=0,
+                    passed=True,
+                    score=0.5,
+                    reason="ok",
+                    reward=0.5,
+                )
+            },
             aggregate={"mean_score": 0.5},
         )
         improved = BenchmarkResult(
-            scores={"t1": le.EvalResult(
-                type="eval", run_id="r", step_id=0,
-                passed=True, score=0.7, reason="better", reward=0.7,
-            )},
+            scores={
+                "t1": le.EvalResult(
+                    type="eval",
+                    run_id="r",
+                    step_id=0,
+                    passed=True,
+                    score=0.7,
+                    reason="better",
+                    reward=0.7,
+                )
+            },
             aggregate={"mean_score": 0.7},
         )
 
         mod = CodeMod(
-            target_file="test.py", description="Better prompt",
-            diff="-old\n+new", rationale="Improve accuracy",
+            target_file="test.py",
+            description="Better prompt",
+            diff="-old\n+new",
+            rationale="Improve accuracy",
             expected_impact="Higher score",
         )
 
@@ -275,6 +327,7 @@ class TestEvolutionIntegration:
 # BDD: Full loop engine cycle with mocks
 # ---------------------------------------------------------------------------
 
+
 class TestLoopEngineIntegration:
     """BDD: Given all components assembled,
     When the LoopEngine runs one cycle,
@@ -287,17 +340,31 @@ class TestLoopEngineIntegration:
         # Mock benchmark: returns a result
         mock_benchmark = AsyncMock()
         result_a = BenchmarkResult(
-            scores={"t1": le.EvalResult(
-                type="eval", run_id="r", step_id=0,
-                passed=True, score=0.5, reason="baseline", reward=0.5,
-            )},
+            scores={
+                "t1": le.EvalResult(
+                    type="eval",
+                    run_id="r",
+                    step_id=0,
+                    passed=True,
+                    score=0.5,
+                    reason="baseline",
+                    reward=0.5,
+                )
+            },
             aggregate={"mean_score": 0.5},
         )
         result_b = BenchmarkResult(
-            scores={"t1": le.EvalResult(
-                type="eval", run_id="r", step_id=0,
-                passed=True, score=0.7, reason="improved", reward=0.7,
-            )},
+            scores={
+                "t1": le.EvalResult(
+                    type="eval",
+                    run_id="r",
+                    step_id=0,
+                    passed=True,
+                    score=0.7,
+                    reason="improved",
+                    reward=0.7,
+                )
+            },
             aggregate={"mean_score": 0.7},
         )
         mock_benchmark.run = AsyncMock(side_effect=[result_a, result_b])
@@ -305,34 +372,49 @@ class TestLoopEngineIntegration:
         # Mock strategy: proposes one mod
         mock_strategy = AsyncMock()
         mock_strategy.name = "test_strategy"
-        mock_strategy.propose = AsyncMock(return_value=[
-            CodeMod(
-                target_file="test.py", description="Improve",
-                diff="-old\n+new", rationale="Better",
-                expected_impact="Higher score",
-            )
-        ])
+        mock_strategy.propose = AsyncMock(
+            return_value=[
+                CodeMod(
+                    target_file="test.py",
+                    description="Improve",
+                    diff="-old\n+new",
+                    rationale="Better",
+                    expected_impact="Higher score",
+                )
+            ]
+        )
 
         # Mock model for building agents
         mock_model = AsyncMock(spec=ModelProvider)
         mock_model.complete = AsyncMock(
             return_value=Message(
-                type="message", run_id="r", step_id=0,
-                role="assistant", content="Done",
+                type="message",
+                run_id="r",
+                step_id=0,
+                role="assistant",
+                content="Done",
             )
         )
         mock_model.count_tokens = MagicMock(return_value=10)
 
+        # Agent builder: wraps make_coding() builder with a mock model to
+        # produce a Harness from a config dict.
+        base_builder = le.make_coding()
+
+        def agent_builder(cfg):
+            if isinstance(cfg, HarnessConfig):
+                return Harness(model=mock_model, config=cfg)
+            # cfg is a dict with source_files/sandbox merged in by _run_benchmark
+            return Harness.from_builder(base_builder, model=mock_model)
+
         engine = le.LoopEngine(
-            agent_builder=le.make_coding(),
+            agent_builder=agent_builder,
             benchmark=mock_benchmark,
             strategies=[mock_strategy],
             gate=le.PromotionGate(min_improvement=0.01),
             sandbox=None,
             max_iterations=1,
         )
-        # Patch _build_agent to use our mock model
-        engine._build_agent = lambda cfg: Harness(model=mock_model, config=cfg if isinstance(cfg, HarnessConfig) else cfg.build())
 
         report = await engine.run()
 
@@ -343,6 +425,7 @@ class TestLoopEngineIntegration:
 # ---------------------------------------------------------------------------
 # BDD: Serialization roundtrip — config survives save/load
 # ---------------------------------------------------------------------------
+
 
 class TestSerializationIntegration:
     """BDD: Given a fully configured harness,
@@ -371,16 +454,21 @@ class TestSerializationIntegration:
         state = State()
         snap = state.snapshot()
 
-        trajectory.add_step(TrajectoryStep(
-            state_before=snap,
-            action=Message(
-                type="message", run_id="r", step_id=0,
-                role="assistant", content="Hello",
-            ),
-            observations=(),
-            reward=0.5,
-            delta=state.compute_delta(snap),
-        ))
+        trajectory.add_step(
+            TrajectoryStep(
+                state_before=snap,
+                action=Message(
+                    type="message",
+                    run_id="r",
+                    step_id=0,
+                    role="assistant",
+                    content="Hello",
+                ),
+                observations=(),
+                reward=0.5,
+                delta=state.compute_delta(snap),
+            )
+        )
 
         path = str(tmp_path / "traj.jsonl")
         trajectory.to_jsonl(path)

@@ -513,3 +513,78 @@ class TestParseUnifiedDiff:
         diff = "--- a/empty.py\n+++ b/empty.py\n"
         hunks = parse_unified_diff(diff)
         assert hunks == []
+
+
+# =========================================================================
+# SLICE: is_safe hardening (bug H1)
+# =========================================================================
+
+
+class TestCodeModSafetyHardening:
+    """is_safe scans only the ADDED code lines and covers more dangerous calls."""
+
+    def test_rationale_mentioning_danger_is_not_a_false_positive(self) -> None:
+        """Prose may discuss dangerous APIs; only the actual added code matters."""
+        danger = "os." + "system"  # avoid the literal token in source
+        mod = CodeMod(
+            target_file="a.py",
+            description="Refactor cleanup",
+            diff="--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+x = 1\n",
+            rationale=f"This removes the unsafe {danger}() call entirely.",
+        )
+        assert mod.is_safe() is True
+
+    def test_recursive_tree_removal_is_unsafe(self) -> None:
+        call = "shutil.rm" + "tree("
+        mod = CodeMod(
+            target_file="a.py",
+            description="cleanup",
+            diff=f"--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n unchanged\n+    {call}path)\n",
+            rationale="cleanup",
+        )
+        assert mod.is_safe() is False
+
+    def test_os_popen_is_unsafe(self) -> None:
+        call = "os.po" + "pen("
+        mod = CodeMod(
+            target_file="a.py",
+            description="run",
+            diff=f"--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n unchanged\n+    {call}'ls')\n",
+            rationale="x",
+        )
+        assert mod.is_safe() is False
+
+
+# =========================================================================
+# SLICE: apply detection (bug M1)
+# =========================================================================
+
+
+class TestCodeModApplyStatus:
+    """apply_with_status signals whether the diff actually applied."""
+
+    def test_applies_when_anchor_found(self) -> None:
+        mod = CodeMod(
+            target_file="a.py",
+            diff="--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+        result, applied = mod.apply_with_status({"a.py": "old\n"})
+        assert applied is True
+        assert result["a.py"] == "new\n"
+
+    def test_reports_not_applied_when_anchor_missing(self) -> None:
+        mod = CodeMod(
+            target_file="a.py",
+            diff="--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-NOPE\n+new\n",
+        )
+        result, applied = mod.apply_with_status({"a.py": "completely different\n"})
+        assert applied is False
+        assert result["a.py"] == "completely different\n"
+
+    def test_reports_not_applied_when_target_missing(self) -> None:
+        mod = CodeMod(
+            target_file="missing.py",
+            diff="--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n",
+        )
+        result, applied = mod.apply_with_status({"a.py": "x\n"})
+        assert applied is False

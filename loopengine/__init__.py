@@ -128,6 +128,12 @@ from loopengine.evaluation import (
     TestSuiteJudge,
     compare,
 )
+from loopengine.evaluation.grader import (
+    GradeResult,
+    IsolatedGrader,
+    is_better,
+    make_subprocess_runner,
+)
 
 # === Layer 5: Evolution ===
 from loopengine.evolution import (
@@ -145,6 +151,20 @@ from loopengine.evolution import (
     analyze_trajectory,
     parse_unified_diff,
     summarize_trajectory,
+)
+from loopengine.evolution.checkpoint import (
+    CheckpointStore,
+    EvolutionCheckpoint,
+)
+from loopengine.evolution.diagnostics import (
+    DiagnosticContext,
+    ExecutionResult,
+    LspDiagnostic,
+    LoopDetector,
+    LoopWarning,
+    failure,
+    format_for_llm,
+    success,
 )
 
 __all__ = [
@@ -171,12 +191,16 @@ __all__ = [
     "Judge", "TestSuiteJudge", "LLMJudge", "MetricJudge", "CompositeJudge",
     "Metric", "PassRateMetric", "EfficiencyMetric", "CustomMetric",
     "Benchmark", "BenchmarkResult", "Comparison", "compare",
+    "GradeResult", "IsolatedGrader", "is_better", "make_subprocess_runner",
     # Layer 5: Evolution
     "CodeMod", "CodeModSet", "parse_unified_diff",
     "Insight", "analyze_trajectory", "summarize_trajectory",
     "EvolutionStrategy", "PromptEvolver", "ConfigEvolver", "CompositeEvolutionStrategy",
     "PromotionDecision", "PromotionGate",
     "EvolutionReport", "LoopEngine",
+    "CheckpointStore", "EvolutionCheckpoint",
+    "ExecutionResult", "LspDiagnostic", "LoopDetector", "LoopWarning",
+    "DiagnosticContext", "format_for_llm", "success", "failure",
 ]
 
 __version__ = "0.1.0"

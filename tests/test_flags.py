@@ -45,6 +45,13 @@ class TestFeatureFlag:
         f = FeatureFlag(name="x", default=True)
         assert f.is_enabled is True
 
+    def test_explicit_value_false_overrides_default_true(self):
+        """Given a FeatureFlag with default=True and value=False (explicitly set),
+        When I inspect it, Then value is False (not overridden by __post_init__)."""
+        f = FeatureFlag(name="x", default=True, value=False)
+        assert f.default is True
+        assert f.value is False  # Bug: __post_init__ incorrectly overrides this to True
+
     def test_flag_equality_by_name(self):
         """Given two FeatureFlags with the same name, When I compare them,
         Then they are equal (flags are identified by name)."""

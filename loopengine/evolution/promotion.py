@@ -4,68 +4,43 @@ Plain English: Think of the Promotion Gate as a code review process.
 Before any self-modification is applied to the real codebase, it must pass
 through this gate. The gate checks:
 
-1. Does the modification actually improve performance?
-2. Does it avoid breaking anything that currently works?
-3. Is it safe? (no destructive operations)
-4. Is the improvement statistically significant? (not just noise)
+1. Is it safe? (no destructive operations)
+2. Is the candidate valid? (no missing/NaN score)
+3. Does the modification actually improve performance by at least
+   ``min_improvement`` (or satisfy a custom ``is_better`` comparator)?
+4. Does it avoid breaking anything that currently works (per-task regression)?
 
 If a modification passes all checks, it's "promoted" — applied to the
 real codebase. If it fails, it's "rolled back" — discarded, and we try
 something else.
 
+NOTE: this gate compares single benchmark runs against fixed thresholds. It
+does NOT perform a statistical-significance test (no repeated trials or
+variance estimate), so a small delta from a noisy/stochastic benchmark can pass.
+Run the benchmark over enough tasks/seeds that the threshold is meaningful, or
+supply a stricter ``min_improvement``.
+
 Real-world analogy: This is like a product review before launch.
+- "Is the product safe to use?" (safety check)
+- "Is the submission even valid?" (validity check)
 - "Does the new feature make users happier?" (improvement check)
 - "Did we break anything that was working?" (regression check)
-- "Is the product safe to use?" (safety check)
-- "Is the improvement real or just a fluke?" (significance check)
 
 Only when ALL checks pass does the product ship.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 # ---------------------------------------------------------------------------
 # Import CodeMod and CodeModSet from sibling module.
-# Use stubs if the other agent hasn't built code_mod.py yet.
+# Direct import — no dangerous is_safe()=True stub fallback (bug C3).
 # ---------------------------------------------------------------------------
 
-try:
-    from loopengine.evolution.code_mod import CodeMod, CodeModSet
-except ImportError:
-    @dataclass(frozen=True)
-    class CodeMod:
-        """Stub CodeMod — replaced when code_mod.py is built."""
-        target_file: str = ""
-        description: str = ""
-        diff: str = ""
-        rationale: str = ""
-        expected_impact: str = ""
-
-        def to_dict(self) -> dict[str, Any]:
-            return {
-                "target_file": self.target_file,
-                "description": self.description,
-                "diff": self.diff,
-                "rationale": self.rationale,
-                "expected_impact": self.expected_impact,
-            }
-
-        def is_safe(self) -> bool:
-            return True
-
-    @dataclass(frozen=True)
-    class CodeModSet:
-        """Stub CodeModSet — replaced when code_mod.py is built."""
-        mods: tuple[CodeMod, ...] = ()
-
-        def is_safe(self) -> bool:
-            return all(m.is_safe() for m in self.mods)
-
-        def apply_to(self, files: dict[str, str]) -> dict[str, str]:
-            return files
+from loopengine.evolution.code_mod import CodeMod, CodeModSet
 
 
 # ---------------------------------------------------------------------------
@@ -127,8 +102,11 @@ class PromotionGate:
     2. NO REGRESSION: "Does this change break anything?" — no individual
        task score may regress by more than no_regression.
     3. SAFETY: "Is this change dangerous?" — all mods must pass is_safe().
-    4. SIGNIFICANCE: "Is this improvement real or just noise?" — the
-       improvement must exceed the threshold.
+    4. VALIDITY: "Is the candidate even valid?" — a missing or NaN aggregate
+       score is rejected outright (it can never rank as best).
+
+    This is a threshold gate, not a statistical-significance test: it compares
+    single runs against fixed thresholds and does not estimate variance.
 
     If ANY check fails, the modification is rejected with a detailed
     explanation. The evolution loop uses this feedback to try again.
@@ -144,6 +122,7 @@ class PromotionGate:
         min_improvement: float = 0.01,
         no_regression: float = 0.02,
         require_safety: bool = True,
+        is_better: Callable[[float, float], bool] | None = None,
     ) -> None:
         """Initialize the PromotionGate.
 
@@ -151,10 +130,16 @@ class PromotionGate:
             min_improvement: Minimum aggregate score delta to approve (default 0.01).
             no_regression: Maximum allowed per-task regression (default 0.02).
             require_safety: Whether mods must pass is_safe() (default True).
+            is_better: Optional ``(candidate_score, baseline_score) -> bool``
+                comparator making the optimization direction explicit (bug H2).
+                When given, it decides whether the candidate is an improvement,
+                replacing the default higher-is-better threshold + regression
+                checks. Default ``None`` keeps the higher-is-better behavior.
         """
         self._min_improvement = min_improvement
         self._no_regression = no_regression
         self._require_safety = require_safety
+        self._is_better = is_better
 
     async def validate(
         self,
@@ -200,6 +185,51 @@ class PromotionGate:
         # --- Check 2: Aggregate improvement ---
         baseline_score = baseline.aggregate.get("mean_score", 0.0)
         candidate_score = candidate.aggregate.get("mean_score", 0.0)
+
+        # Invalid candidates can never be promoted — a missing or NaN score must
+        # not slip through (an invalid run must never rank as "best"; bug H2).
+        if candidate_score is None or (
+            isinstance(candidate_score, float) and math.isnan(candidate_score)
+        ):
+            details["validity"] = {"passed": False, "candidate_score": candidate_score}
+            return PromotionDecision(
+                promoted=False,
+                reason="Invalid candidate: missing or NaN aggregate score.",
+                details=details,
+            )
+
+        # When an explicit optimization-direction comparator is supplied, it is
+        # the single source of truth for "did this improve?" — the default
+        # higher-is-better threshold and regression checks (which assume
+        # higher==better) are bypassed so they can't fight the comparator.
+        if self._is_better is not None:
+            improved = bool(self._is_better(candidate_score, baseline_score))
+            details["improvement"] = {
+                "baseline_score": baseline_score,
+                "candidate_score": candidate_score,
+                "comparator": "custom is_better",
+                "passed": improved,
+            }
+            if not improved:
+                return PromotionDecision(
+                    promoted=False,
+                    reason=(
+                        f"Not an improvement under is_better: candidate "
+                        f"{candidate_score:.4f} vs baseline {baseline_score:.4f}."
+                    ),
+                    details=details,
+                )
+            details["verdict"] = "promoted"
+            return PromotionDecision(
+                promoted=True,
+                reason=(
+                    f"Approved by is_better: candidate {candidate_score:.4f} "
+                    f"beats baseline {baseline_score:.4f}, safety "
+                    f"{'passed' if self._require_safety else 'skipped'}."
+                ),
+                details=details,
+            )
+
         improvement = candidate_score - baseline_score
 
         details["improvement"] = {

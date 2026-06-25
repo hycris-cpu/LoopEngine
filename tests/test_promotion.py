@@ -437,3 +437,45 @@ class TestZeroRegressionTolerance:
         decision = await gate.validate(baseline, candidate, mod)
 
         assert decision.promoted is True
+
+
+# ---------------------------------------------------------------------------
+# Slice: invalid-candidate guard + is_better direction (bug H2)
+# ---------------------------------------------------------------------------
+
+
+class TestPromotionGateContract:
+    """The gate rejects invalid candidates and honors an is_better comparator."""
+
+    async def test_invalid_candidate_is_never_promoted(self):
+        from loopengine.evolution.promotion import PromotionGate, BenchmarkResult
+
+        gate = PromotionGate(min_improvement=0.0, no_regression=1.0)
+        baseline = BenchmarkResult(
+            scores={"task_0": EvalResult(passed=True, score=0.5, reason="")},
+            aggregate={"mean_score": 0.5},
+        )
+        candidate = BenchmarkResult(
+            scores={"task_0": EvalResult(passed=True, score=0.5, reason="")},
+            aggregate={"mean_score": float("nan")},
+        )
+        mod = CodeMod(target_file="x.py", diff="")
+        decision = await gate.validate(baseline, candidate, mod)
+        assert decision.promoted is False
+
+    async def test_custom_is_better_promotes_a_score_decrease(self):
+        from loopengine.evolution.promotion import PromotionGate, BenchmarkResult
+
+        # Lower-is-better: a candidate that DECREASES the score is an improvement.
+        gate = PromotionGate(is_better=lambda cand, base: cand < base)
+        baseline = BenchmarkResult(
+            scores={"task_0": EvalResult(passed=True, score=0.5, reason="")},
+            aggregate={"mean_score": 0.5},
+        )
+        candidate = BenchmarkResult(
+            scores={"task_0": EvalResult(passed=True, score=0.3, reason="")},
+            aggregate={"mean_score": 0.3},
+        )
+        mod = CodeMod(target_file="x.py", diff="")
+        decision = await gate.validate(baseline, candidate, mod)
+        assert decision.promoted is True

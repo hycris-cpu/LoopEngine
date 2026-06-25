@@ -287,3 +287,40 @@ describe('RunResult fields populated', () => {
     expect(result.eval_result!.reason).toBe('well done');
   });
 });
+
+describe('run_loop token accounting (bug C1)', () => {
+  test('is linear, not quadratic', async () => {
+    // Model whose count_tokens reflects the number of messages it is handed.
+    class LenCountingModel implements ModelProvider {
+      private _responses: Message[];
+      private _i = 0;
+      constructor(responses: Message[]) { this._responses = [...responses]; }
+      async complete(): Promise<Message> {
+        const idx = Math.min(this._i, this._responses.length - 1);
+        this._i++;
+        return this._responses[idx];
+      }
+      count_tokens(messages: readonly Message[]): number { return messages.length; }
+    }
+    class EchoTool implements Tool {
+      get name() { return 'echo'; }
+      get description() { return 'Echo input'; }
+      get input_schema() { return { type: 'object', properties: {} }; }
+      async execute(): Promise<ToolResult> { return new ToolResult({ call_id: 'c1', output: 'ok' }); }
+    }
+    const tc = new ToolCall({ name: 'echo', input: {} });
+    const responses = [
+      new Message({ role: MessageType.ASSISTANT, content: '', tool_calls: [tc] }),
+      new Message({ role: MessageType.ASSISTANT, content: '', tool_calls: [tc] }),
+      new Message({ role: MessageType.ASSISTANT, content: 'done' }),
+    ];
+    const model = new LenCountingModel(responses);
+    const task = new MockTask({ prompt: 'go', max_steps: 10 });
+    const config = new HarnessConfig({ tools: [new EchoTool()] });
+    const result = await run_loop(task, model, config);
+    // step0: assistant+tool (2), step1: assistant+tool (2), step2: assistant (1) => 5.
+    // The old quadratic bug reported 12.
+    expect(result.total_steps).toBe(3);
+    expect(result.total_tokens).toBe(5);
+  });
+});

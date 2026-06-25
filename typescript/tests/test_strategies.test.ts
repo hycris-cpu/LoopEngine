@@ -187,3 +187,15 @@ describe('CompositeEvolutionStrategy', () => {
     expect(mods).toEqual([]);
   });
 });
+
+describe('ConfigEvolver targeting (bug M4)', () => {
+  test('targets an existing source file', async () => {
+    const evolver = new ConfigEvolver(0.7);
+    const trajectory = new Trajectory();
+    const evalResult = new EvalResult({ passed: false, score: 0.5, reason: 'low' });
+    const source = { 'loopengine/config.py': 'budget = 1\n' };
+    const mods = await evolver.propose(trajectory, evalResult, {}, source);
+    expect(mods.length).toBeGreaterThan(0);
+    expect(mods.every((m) => m.target_file === 'loopengine/config.py')).toBe(true);
+  });
+});

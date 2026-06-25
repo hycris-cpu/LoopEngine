@@ -37,6 +37,9 @@ export {
   PassRateMetric, EfficiencyMetric, CustomMetric,
   Benchmark, BenchmarkResult, Comparison, compare,
 } from './evaluation';
+export {
+  GradeResult, IsolatedGrader, is_better, make_subprocess_runner,
+} from './evaluation/grader';
 
 // Layer 5: Evolution
 export type { EvolutionStrategy } from './evolution';
@@ -47,3 +50,10 @@ export {
   PromotionDecision, PromotionGate,
   EvolutionReport, LoopEngine,
 } from './evolution';
+export {
+  CheckpointStore, EvolutionCheckpoint,
+} from './evolution/checkpoint';
+export {
+  ExecutionResult, LspDiagnostic, LoopDetector, LoopWarning,
+  DiagnosticContext, format_for_llm, success, failure,
+} from './evolution/diagnostics';

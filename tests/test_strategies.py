@@ -434,3 +434,24 @@ class TestCompositeEvolutionStrategy:
         )
 
         assert mods == []
+
+
+# ---------------------------------------------------------------------------
+# Slice: ConfigEvolver targets an existing source file (bug M4)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigEvolverTargeting:
+    async def test_targets_existing_source_file(self):
+        """A hard-coded 'config.py' target never applies; target a real file."""
+        from loopengine.evolution.strategies import ConfigEvolver
+
+        evolver = ConfigEvolver(score_threshold=0.7)
+        trajectory = Trajectory()
+        eval_result = EvalResult(passed=False, score=0.5, reason="low")
+        source = {"loopengine/config.py": "budget = 1\n"}
+
+        mods = await evolver.propose(trajectory, eval_result, {}, source)
+
+        assert mods
+        assert all(m.target_file == "loopengine/config.py" for m in mods)

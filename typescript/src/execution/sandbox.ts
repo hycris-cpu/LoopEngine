@@ -455,3 +455,193 @@ function matchGlob(name: string, pattern: string): boolean {
   const regexPattern = `^${escaped.replace(/\*/g, '.*').replace(/\?/g, '.')}$`;
   return new RegExp(regexPattern).test(name);
 }
+
+// ---------------------------------------------------------------------------
+// DockerSandbox — runs commands INSIDE a container for real isolation
+// ---------------------------------------------------------------------------
+
+import * as posix from 'node:path/posix';
+
+/**
+ * A host-docker runner: given an argv list (and optional stdin + timeout),
+ * execute it on the host and return [stdout, stderr, exit_code].
+ */
+export type DockerRunner = (
+  argv: string[],
+  stdin?: string | null,
+  timeout?: number,
+) => Promise<[string, string, number]>;
+
+/** Quote a string for safe use inside a single-quoted sh argument. */
+function shSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Default runner: execute a docker argv on the host without a shell, so
+ * arguments are passed literally and cannot be reinterpreted by a host shell.
+ */
+export const defaultDockerRunner: DockerRunner = (argv, stdin = null, timeout = 30) =>
+  new Promise<[string, string, number]>((resolve, reject) => {
+    const proc = spawn(argv[0], argv.slice(1), { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL');
+      reject(new Error('docker command timed out'));
+    }, timeout * 1000);
+    proc.stdout.on('data', (d) => (out += d.toString()));
+    proc.stderr.on('data', (d) => (err += d.toString()));
+    proc.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      resolve([out, err, code ?? 0]);
+    });
+    if (stdin !== null && stdin !== undefined) {
+      proc.stdin.write(stdin);
+    }
+    proc.stdin.end();
+  });
+
+/**
+ * A sandbox that runs every operation INSIDE a Docker container.
+ *
+ * Unlike LocalSandbox (which runs on the host with no isolation), DockerSandbox
+ * confines all execution and file access to a container and to a single working
+ * directory inside it. Host docker invocation is delegated to an injected
+ * `runner` so the translation logic is unit-testable without a running daemon.
+ */
+export class DockerSandbox implements Sandbox {
+  private readonly _container: string;
+  private readonly _workdir: string;
+  private readonly _run: DockerRunner;
+
+  constructor(container: string, workdir = '/workspace', runner: DockerRunner = defaultDockerRunner) {
+    this._container = container;
+    this._workdir = workdir.replace(/\/+$/, '') || '/';
+    this._run = runner;
+  }
+
+  /** Resolve a path to an absolute path confined to the workdir. */
+  private _resolve(p: string): string {
+    const candidate = posix.isAbsolute(p) ? p : posix.join(this._workdir, p);
+    const normalized = posix.normalize(candidate).replace(/\/+$/, '') || '/';
+    if (normalized !== this._workdir && !normalized.startsWith(this._workdir + '/')) {
+      throw new Error(`Path escapes sandbox workdir: ${p}`);
+    }
+    return normalized;
+  }
+
+  async exec(command: string, cwd = '.', timeout = 30): Promise<[string, string, number]> {
+    const workdir = this._resolve(cwd);
+    return this._run(['docker', 'exec', '-w', workdir, this._container, 'sh', '-c', command], null, timeout);
+  }
+
+  async read_file(filePath: string): Promise<string> {
+    const target = this._resolve(filePath);
+    const [out, , code] = await this._run(['docker', 'exec', this._container, 'cat', target], null, 30);
+    if (code !== 0) {
+      throw new Error(`File not found in container: ${filePath}`);
+    }
+    return out;
+  }
+
+  async write_file(filePath: string, content: string): Promise<void> {
+    const target = this._resolve(filePath);
+    const parent = posix.dirname(target);
+    if (parent) {
+      await this._run(['docker', 'exec', this._container, 'mkdir', '-p', parent], null, 30);
+    }
+    await this._run(
+      ['docker', 'exec', '-i', this._container, 'sh', '-c', `cat > ${shSingleQuote(target)}`],
+      content,
+      30,
+    );
+  }
+
+  async list_dir(dirPath: string): Promise<string[]> {
+    const target = this._resolve(dirPath);
+    const [out, , code] = await this._run(['docker', 'exec', this._container, 'ls', '-1A', target], null, 30);
+    if (code !== 0) {
+      throw new Error(`Directory not found in container: ${dirPath}`);
+    }
+    return out.split('\n').filter((l) => l.length > 0);
+  }
+
+  async glob_files(pattern: string, dirPath = '.'): Promise<string[]> {
+    const base = this._resolve(dirPath);
+    const [out, , code] = await this._run(
+      ['docker', 'exec', this._container, 'sh', '-c', `find ${shSingleQuote(base)} -type f -name ${shSingleQuote(pattern)}`],
+      null,
+      30,
+    );
+    if (code !== 0) return [];
+    return out.split('\n').filter((l) => l.length > 0);
+  }
+
+  async grep_files(pattern: string, dirPath = '.'): Promise<string[]> {
+    const base = this._resolve(dirPath);
+    const [out, , code] = await this._run(
+      ['docker', 'exec', this._container, 'grep', '-rn', pattern, base],
+      null,
+      30,
+    );
+    if (code !== 0) return [];
+    return out.split('\n').filter((l) => l.length > 0);
+  }
+}
+
+/**
+ * Manages Docker containers, handing out DockerSandbox instances. acquire()
+ * starts a detached container; release()/shutdown() force-remove containers.
+ */
+export class DockerSandboxProvider implements SandboxProvider {
+  private readonly _image: string;
+  private readonly _workdir: string;
+  private readonly _run: DockerRunner;
+  private readonly _containers = new Map<DockerSandbox, string>();
+  private _shutdown = false;
+
+  constructor(image: string, workdir = '/workspace', runner: DockerRunner = defaultDockerRunner) {
+    this._image = image;
+    this._workdir = workdir;
+    this._run = runner;
+  }
+
+  async acquire(): Promise<DockerSandbox> {
+    if (this._shutdown) {
+      throw new Error('Cannot acquire sandbox: provider is shut down');
+    }
+    const [out, err, code] = await this._run(
+      ['docker', 'run', '-d', '-w', this._workdir, this._image, 'sleep', 'infinity'],
+      null,
+      60,
+    );
+    if (code !== 0) {
+      throw new Error(`Failed to start container: ${err}`);
+    }
+    const containerId = out.trim();
+    const sandbox = new DockerSandbox(containerId, this._workdir, this._run);
+    this._containers.set(sandbox, containerId);
+    return sandbox;
+  }
+
+  async release(sandbox: DockerSandbox): Promise<void> {
+    const containerId = this._containers.get(sandbox);
+    if (containerId !== undefined) {
+      this._containers.delete(sandbox);
+      await this._run(['docker', 'rm', '-f', containerId], null, 30);
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    this._shutdown = true;
+    for (const containerId of this._containers.values()) {
+      await this._run(['docker', 'rm', '-f', containerId], null, 30);
+    }
+    this._containers.clear();
+  }
+}

@@ -19,3 +19,11 @@ export {
   Comparison,
   compare,
 } from './benchmark';
+
+export type { GraderRunner } from './grader';
+export {
+  GradeResult,
+  IsolatedGrader,
+  is_better,
+  make_subprocess_runner,
+} from './grader';

@@ -227,3 +227,72 @@ describe('LocalSandbox integration', () => {
     expect(entries).toContain('b.txt');
   });
 });
+
+// ===========================================================================
+// Feature A: DockerSandbox — container isolation via an injected docker runner
+// ===========================================================================
+import { DockerSandbox, DockerSandboxProvider } from '../src/execution/sandbox';
+
+class RecordingRunner {
+  calls: Array<{ argv: string[]; stdin: string | null; timeout: number }> = [];
+  private _results: Array<[string, string, number]>;
+  private _default: [string, string, number];
+  constructor(result: [string, string, number] = ['', '', 0], results?: Array<[string, string, number]>) {
+    this._default = result;
+    this._results = results ? [...results] : [];
+  }
+  run = async (argv: string[], stdin: string | null = null, timeout = 30): Promise<[string, string, number]> => {
+    this.calls.push({ argv: [...argv], stdin, timeout });
+    return this._results.length > 0 ? this._results.shift()! : this._default;
+  };
+}
+
+describe('DockerSandbox', () => {
+  test('exec builds a docker command', async () => {
+    const runner = new RecordingRunner(['hi\n', '', 0]);
+    const sb = new DockerSandbox('c1', '/workspace', runner.run);
+    const [out, err, code] = await sb.exec('echo hi', '.');
+    expect([out, err, code]).toEqual(['hi\n', '', 0]);
+    const argv = runner.calls[0].argv;
+    expect(argv.slice(0, 2)).toEqual(['docker', 'exec']);
+    expect(argv).toContain('c1');
+    expect(argv).toContain('echo hi');
+  });
+
+  test('read_file returns contents', async () => {
+    const sb = new DockerSandbox('c1', '/workspace', new RecordingRunner(['data', '', 0]).run);
+    expect(await sb.read_file('a.txt')).toBe('data');
+  });
+
+  test('read_file missing throws', async () => {
+    const sb = new DockerSandbox('c1', '/workspace', new RecordingRunner(['', 'nope', 1]).run);
+    await expect(sb.read_file('missing.txt')).rejects.toThrow();
+  });
+
+  test('write_file mkdir then writes via stdin', async () => {
+    const runner = new RecordingRunner();
+    const sb = new DockerSandbox('c1', '/workspace', runner.run);
+    await sb.write_file('sub/f.txt', 'hello');
+    expect(runner.calls.some((c) => c.argv.includes('mkdir'))).toBe(true);
+    const writeCall = runner.calls[runner.calls.length - 1];
+    expect(writeCall.stdin).toBe('hello');
+    expect(writeCall.argv.join(' ')).toContain('/workspace/sub/f.txt');
+  });
+
+  test('path escape is rejected', async () => {
+    const sb = new DockerSandbox('c1', '/workspace', new RecordingRunner().run);
+    await expect(sb.read_file('../etc/passwd')).rejects.toThrow();
+  });
+});
+
+describe('DockerSandboxProvider', () => {
+  test('acquire runs a container and release removes it', async () => {
+    const runner = new RecordingRunner(['container123\n', '', 0]);
+    const provider = new DockerSandboxProvider('python:3.12', '/workspace', runner.run);
+    const sb = await provider.acquire();
+    expect(sb).toBeInstanceOf(DockerSandbox);
+    expect(runner.calls.some((c) => c.argv.slice(0, 2).join(' ') === 'docker run')).toBe(true);
+    await provider.release(sb);
+    expect(runner.calls.some((c) => c.argv.includes('rm'))).toBe(true);
+  });
+});

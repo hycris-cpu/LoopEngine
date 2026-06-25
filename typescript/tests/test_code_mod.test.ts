@@ -183,3 +183,56 @@ describe('parse_unified_diff', () => {
     expect(parse_unified_diff('--- a/empty.py\n+++ b/empty.py\n')).toEqual([]);
   });
 });
+
+describe('CodeMod.is_safe hardening (bug H1)', () => {
+  test('rationale mentioning danger is not a false positive', () => {
+    const danger = 'os.' + 'system'; // avoid the literal token in source
+    const mod = new CodeMod({
+      target_file: 'a.py',
+      description: 'Refactor cleanup',
+      diff: '--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+x = 1\n',
+      rationale: `This removes the unsafe ${danger}() call entirely.`,
+    });
+    expect(mod.is_safe()).toBe(true);
+  });
+
+  test('recursive tree removal is unsafe', () => {
+    const call = 'shutil.rm' + 'tree(';
+    const mod = new CodeMod({
+      target_file: 'a.py',
+      diff: `--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n unchanged\n+    ${call}path)\n`,
+    });
+    expect(mod.is_safe()).toBe(false);
+  });
+
+  test('os.popen is unsafe', () => {
+    const call = 'os.po' + 'pen(';
+    const mod = new CodeMod({
+      target_file: 'a.py',
+      diff: `--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n unchanged\n+    ${call}'ls')\n`,
+    });
+    expect(mod.is_safe()).toBe(false);
+  });
+});
+
+describe('CodeMod.apply_with_status (bug M1)', () => {
+  test('applies when anchor found', () => {
+    const mod = new CodeMod({ target_file: 'a.py', diff: '--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new\n' });
+    const [result, applied] = mod.apply_with_status({ 'a.py': 'old\n' });
+    expect(applied).toBe(true);
+    expect(result['a.py']).toBe('new\n');
+  });
+
+  test('reports not applied when anchor missing', () => {
+    const mod = new CodeMod({ target_file: 'a.py', diff: '--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-NOPE\n+new\n' });
+    const [result, applied] = mod.apply_with_status({ 'a.py': 'completely different\n' });
+    expect(applied).toBe(false);
+    expect(result['a.py']).toBe('completely different\n');
+  });
+
+  test('reports not applied when target missing', () => {
+    const mod = new CodeMod({ target_file: 'missing.py', diff: '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n' });
+    const [, applied] = mod.apply_with_status({ 'a.py': 'x\n' });
+    expect(applied).toBe(false);
+  });
+});

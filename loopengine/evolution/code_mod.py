@@ -32,10 +32,17 @@ from typing import Any
 # no matter how good the rest of the change looks.
 _DANGEROUS_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"os\.system\s*\("),
+    re.compile(r"os\.popen\s*\("),
+    re.compile(r"os\.exec[lv]\w*\s*\("),
+    re.compile(r"os\.(remove|unlink|rmdir)\s*\("),
     re.compile(r"rm\s+-rf\b"),
+    re.compile(r"shutil\.rmtree\s*\("),
+    re.compile(r"\.rmtree\s*\("),
+    re.compile(r"\.unlink\s*\("),
     re.compile(r"__import__\s*\(\s*['\"]os['\"]"),
     re.compile(r"__import__\s*\(\s*['\"]subprocess['\"]"),
-    re.compile(r"subprocess\.(call|run|Popen|check_output)\s*\("),
+    re.compile(r"importlib\.import_module\s*\("),
+    re.compile(r"subprocess\.(call|run|Popen|check_output|check_call)\s*\("),
     re.compile(r"\bexec\s*\("),
     re.compile(r"\beval\s*\("),
 ]
@@ -146,6 +153,65 @@ class CodeMod:
         result[self.target_file] = content
         return result
 
+    def apply_with_status(
+        self, files: dict[str, str]
+    ) -> tuple[dict[str, str], bool]:
+        """Apply this mod and report whether it actually landed.
+
+        Unlike apply_to (which silently returns the files unchanged when the
+        diff's anchor text isn't present), this returns a ``(files, applied)``
+        pair. ``applied`` is True only when the target exists, the diff parses
+        to at least one hunk, and every hunk's removed/context anchor was found
+        and replaced. The evolution loop uses this to skip no-op mods instead of
+        wasting a benchmark run on them (bug M1).
+
+        Args:
+            files: Dict mapping file path to content.
+
+        Returns:
+            A ``(new_files, applied)`` tuple. ``new_files`` is a fresh dict.
+        """
+        if self.target_file not in files:
+            return dict(files), False
+
+        hunks = parse_unified_diff(self.diff)
+        if not hunks:
+            return dict(files), False
+
+        result = dict(files)
+        content = result[self.target_file]
+        applied_any = False
+        all_anchors_found = True
+
+        for old_text, new_text in hunks:
+            if old_text:
+                if old_text in content:
+                    content = content.replace(old_text, new_text, 1)
+                    applied_any = True
+                else:
+                    all_anchors_found = False
+            else:
+                # Pure addition with no anchor — cannot place it reliably.
+                all_anchors_found = False
+
+        result[self.target_file] = content
+        return result, (applied_any and all_anchors_found)
+
+    def _added_lines(self) -> str:
+        """Return only the lines INTRODUCED by this diff (the '+' lines).
+
+        Context and removed lines are existing code, not something this mod
+        introduces, so they must not trigger the safety check. File headers
+        ('+++') are excluded.
+        """
+        added: list[str] = []
+        for line in self.diff.split("\n"):
+            if line.startswith("+++"):
+                continue
+            if line.startswith("+"):
+                added.append(line[1:])
+        return "\n".join(added)
+
     def is_safe(self) -> bool:
         """Check if this modification passes basic safety checks.
 
@@ -157,11 +223,16 @@ class CodeMod:
         This is NOT a complete security audit — it's a fast first-pass filter.
         The promotion gate does additional validation.
 
+        Only the ADDED code lines are scanned. Scanning the description/rationale
+        prose produced false positives (a mod that merely *mentions* a dangerous
+        call in its reasoning was wrongly rejected), and scanning removed/context
+        lines flags pre-existing code this mod did not introduce (bug H1).
+
         Returns:
             True if the modification looks safe, False if it contains
             dangerous patterns.
         """
-        text_to_check = self.diff + " " + self.description + " " + self.rationale
+        text_to_check = self._added_lines()
         for pattern in _DANGEROUS_PATTERNS:
             if pattern.search(text_to_check):
                 return False

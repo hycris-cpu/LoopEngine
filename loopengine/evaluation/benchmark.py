@@ -20,7 +20,6 @@ from typing import Any
 
 from loopengine.primitives.events import EvalResult
 
-
 # ---------------------------------------------------------------------------
 # BenchmarkResult — the outcome of a benchmark run
 # ---------------------------------------------------------------------------
@@ -121,17 +120,30 @@ class Benchmark:
         """Maximum concurrent task evaluations."""
         return self._parallelism
 
-    async def run(self, tasks: list[Any]) -> BenchmarkResult:
-        """Run all tasks through the judge and produce a BenchmarkResult.
+    async def run(
+        self,
+        run_results: list[Any],
+        tasks: list[Any] | None = None,
+    ) -> BenchmarkResult:
+        """Run all run results through the judge and produce a BenchmarkResult.
 
         Steps:
-        1. For each task, evaluate its trajectory with the judge
+        1. For each run result, extract its trajectory and evaluate with the judge
         2. Collect all EvalResults
         3. Compute aggregate statistics (mean score, pass rate)
         4. Return a frozen BenchmarkResult
 
+        When ``tasks`` is provided, the original Task objects are passed to the
+        judge (which needs ``task.prompt``, ``task.max_steps``, etc.). When
+        ``tasks`` is None, the run result itself is passed — this preserves
+        backward compatibility for callers that pass Task objects directly.
+
         Args:
-            tasks: A list of Task objects to evaluate.
+            run_results: A list of RunResult objects (or Task objects with a
+                        ``trajectory`` attribute) to evaluate.
+            tasks: Optional list of original Task objects, one per run result.
+                   When provided, these are passed to the judge instead of the
+                   run results.
 
         Returns:
             A BenchmarkResult with individual scores and aggregates.
@@ -140,29 +152,39 @@ class Benchmark:
 
         scores: dict[str, EvalResult] = {}
 
-        # Evaluate each task
+        # Pair each run result with its original task (if provided)
+        paired: list[tuple[Any, Any]] = []
+        for i, run_result in enumerate(run_results):
+            original_task = tasks[i] if tasks and i < len(tasks) else run_result
+            paired.append((run_result, original_task))
+
+        # Evaluate each pair
         if self._parallelism <= 1:
             # Sequential mode
-            for i, task in enumerate(tasks):
+            for i, (run_result, original_task) in enumerate(paired):
                 task_id = f"task_{i}"
-                trajectory = _get_trajectory(task)
-                result = await self._judge.evaluate(trajectory, task)
+                trajectory = _get_trajectory(run_result)
+                result = await self._judge.evaluate(trajectory, original_task)
                 scores[task_id] = result
         else:
             # Parallel mode
-            async def _eval_one(index: int, task: Any) -> tuple[str, EvalResult]:
+            async def _eval_one(
+                index: int, run_result: Any, original_task: Any
+            ) -> tuple[str, EvalResult]:
                 task_id = f"task_{index}"
-                trajectory = _get_trajectory(task)
-                result = await self._judge.evaluate(trajectory, task)
+                trajectory = _get_trajectory(run_result)
+                result = await self._judge.evaluate(trajectory, original_task)
                 return task_id, result
 
             # Run in batches of parallelism
-            for batch_start in range(0, len(tasks), self._parallelism):
-                batch = tasks[batch_start:batch_start + self._parallelism]
-                batch_results = await asyncio.gather(*[
-                    _eval_one(batch_start + i, task)
-                    for i, task in enumerate(batch)
-                ])
+            for batch_start in range(0, len(paired), self._parallelism):
+                batch = paired[batch_start : batch_start + self._parallelism]
+                batch_results = await asyncio.gather(
+                    *[
+                        _eval_one(batch_start + i, rr, ot)
+                        for i, (rr, ot) in enumerate(batch)
+                    ]
+                )
                 for task_id, result in batch_results:
                     scores[task_id] = result
 

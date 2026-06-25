@@ -450,3 +450,197 @@ class LocalSandboxProvider:
         self._shutdown = True
         self._available.clear()
         self._in_use.clear()
+
+
+# ---------------------------------------------------------------------------
+# DockerSandbox — runs commands INSIDE a container for real isolation
+# ---------------------------------------------------------------------------
+
+import shlex
+import posixpath
+from typing import Awaitable, Callable, Optional
+
+# A host-docker runner: given an argv list (and optional stdin + timeout),
+# execute it on the host and return (stdout, stderr, exit_code).
+DockerRunner = Callable[..., Awaitable["tuple[str, str, int]"]]
+
+
+async def _default_docker_runner(
+    argv: list[str], stdin: Optional[str] = None, timeout: float = 30
+) -> tuple[str, str, int]:
+    """Default runner: execute a docker argv on the host without a shell.
+
+    Uses create_subprocess_exec (no shell) so arguments are passed literally and
+    cannot be reinterpreted by a host shell.
+    """
+    process = await asyncio.create_subprocess_exec(
+        *argv,
+        stdin=asyncio.subprocess.PIPE if stdin is not None else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out_b, err_b = await asyncio.wait_for(
+            process.communicate(stdin.encode("utf-8") if stdin is not None else None),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        raise
+    return (
+        out_b.decode("utf-8", errors="replace"),
+        err_b.decode("utf-8", errors="replace"),
+        process.returncode or 0,
+    )
+
+
+class DockerSandbox:
+    """A sandbox that runs every operation INSIDE a Docker container.
+
+    Unlike LocalSandbox (which runs on the host with no isolation), DockerSandbox
+    confines all execution and file access to a container and to a single working
+    directory inside it. The agent can never reach the host filesystem or escape
+    the workdir.
+
+    Host docker invocation is delegated to an injected ``runner`` so the
+    translation logic is unit-testable without a running daemon.
+    """
+
+    def __init__(
+        self,
+        container: str,
+        workdir: str = "/workspace",
+        runner: Optional[DockerRunner] = None,
+    ) -> None:
+        self._container = container
+        self._workdir = workdir.rstrip("/") or "/"
+        self._run: DockerRunner = runner or _default_docker_runner
+
+    def _resolve(self, path: str) -> str:
+        """Resolve ``path`` to an absolute path confined to the workdir.
+
+        Raises ValueError if the path escapes the workdir (e.g. '../etc/passwd'
+        or an absolute path outside the workdir).
+        """
+        candidate = path if posixpath.isabs(path) else posixpath.join(self._workdir, path)
+        normalized = posixpath.normpath(candidate)
+        if normalized != self._workdir and not normalized.startswith(self._workdir + "/"):
+            raise ValueError(f"Path escapes sandbox workdir: {path}")
+        return normalized
+
+    async def exec(
+        self, command: str, cwd: str = ".", timeout: float = 30
+    ) -> tuple[str, str, int]:
+        """Run a shell command inside the container, confined to the workdir."""
+        workdir = self._resolve(cwd)
+        argv = ["docker", "exec", "-w", workdir, self._container, "sh", "-c", command]
+        return await self._run(argv, None, timeout)
+
+    async def read_file(self, path: str) -> str:
+        """Read a file from inside the container."""
+        target = self._resolve(path)
+        out, _err, code = await self._run(
+            ["docker", "exec", self._container, "cat", target], None, 30
+        )
+        if code != 0:
+            raise FileNotFoundError(f"File not found in container: {path}")
+        return out
+
+    async def write_file(self, path: str, content: str) -> None:
+        """Write a file inside the container, creating parent directories."""
+        target = self._resolve(path)
+        parent = posixpath.dirname(target)
+        if parent:
+            await self._run(
+                ["docker", "exec", self._container, "mkdir", "-p", parent], None, 30
+            )
+        await self._run(
+            ["docker", "exec", "-i", self._container, "sh", "-c",
+             f"cat > {shlex.quote(target)}"],
+            content,
+            30,
+        )
+
+    async def list_dir(self, path: str) -> list[str]:
+        """List a directory inside the container."""
+        target = self._resolve(path)
+        out, _err, code = await self._run(
+            ["docker", "exec", self._container, "ls", "-1A", target], None, 30
+        )
+        if code != 0:
+            raise FileNotFoundError(f"Directory not found in container: {path}")
+        return [line for line in out.split("\n") if line]
+
+    async def glob_files(self, pattern: str, path: str = ".") -> list[str]:
+        """Find files matching a glob pattern inside the container."""
+        base = self._resolve(path)
+        out, _err, code = await self._run(
+            ["docker", "exec", self._container, "sh", "-c",
+             f"find {shlex.quote(base)} -type f -name {shlex.quote(pattern)}"],
+            None,
+            30,
+        )
+        if code != 0:
+            return []
+        return [line for line in out.split("\n") if line]
+
+    async def grep_files(self, pattern: str, path: str = ".") -> list[str]:
+        """Search file contents for a pattern inside the container."""
+        base = self._resolve(path)
+        out, _err, code = await self._run(
+            ["docker", "exec", self._container, "grep", "-rn", pattern, base],
+            None,
+            30,
+        )
+        if code != 0:
+            return []
+        return [line for line in out.split("\n") if line]
+
+
+class DockerSandboxProvider:
+    """Manages Docker containers, handing out DockerSandbox instances.
+
+    acquire() starts a detached container and returns a DockerSandbox bound to
+    it; release()/shutdown() force-remove containers. Host docker invocation is
+    delegated to an injected runner for testability.
+    """
+
+    def __init__(
+        self,
+        image: str,
+        workdir: str = "/workspace",
+        runner: Optional[DockerRunner] = None,
+    ) -> None:
+        self._image = image
+        self._workdir = workdir
+        self._run: DockerRunner = runner or _default_docker_runner
+        self._containers: dict[DockerSandbox, str] = {}
+        self._shutdown = False
+
+    async def acquire(self) -> DockerSandbox:
+        if self._shutdown:
+            raise RuntimeError("Cannot acquire sandbox: provider is shut down")
+        out, _err, code = await self._run(
+            ["docker", "run", "-d", "-w", self._workdir, self._image,
+             "sleep", "infinity"],
+            None,
+            60,
+        )
+        if code != 0:
+            raise RuntimeError(f"Failed to start container: {_err}")
+        container_id = out.strip()
+        sandbox = DockerSandbox(container_id, workdir=self._workdir, runner=self._run)
+        self._containers[sandbox] = container_id
+        return sandbox
+
+    async def release(self, sandbox: DockerSandbox) -> None:
+        container_id = self._containers.pop(sandbox, None)
+        if container_id is not None:
+            await self._run(["docker", "rm", "-f", container_id], None, 30)
+
+    async def shutdown(self) -> None:
+        self._shutdown = True
+        for container_id in list(self._containers.values()):
+            await self._run(["docker", "rm", "-f", container_id], None, 30)
+        self._containers.clear()

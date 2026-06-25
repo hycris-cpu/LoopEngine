@@ -387,9 +387,13 @@ export class ConfigEvolver implements EvolutionStrategy {
     trajectory: unknown,
     eval_result: unknown,
     _config: unknown,
-    _source_code: Record<string, string>
+    source_code: Record<string, string>
   ): CodeMod[] {
     const mods: CodeMod[] = [];
+
+    // Target a config file that actually exists in the source map. A hard-coded
+    // 'config.py' is usually absent, so the mod could never apply (bug M4).
+    const target = this._pick_target(source_code);
 
     const score =
       eval_result !== null && eval_result !== undefined && typeof eval_result === 'object'
@@ -404,7 +408,7 @@ export class ConfigEvolver implements EvolutionStrategy {
     if (score < this._score_threshold) {
       mods.push(
         new CodeMod({
-          target_file: 'config.py',
+          target_file: target,
           description: 'Increase budget due to low score',
           diff: this._budget_diff(trajectory),
           rationale: `Score ${score.toFixed(3)} is below threshold ${this._score_threshold}. The agent may need more resources to complete tasks effectively.`,
@@ -417,7 +421,7 @@ export class ConfigEvolver implements EvolutionStrategy {
     if (step_count > this._step_threshold) {
       mods.push(
         new CodeMod({
-          target_file: 'config.py',
+          target_file: target,
           description: 'Enable efficiency flags due to excessive steps',
           diff: this._efficiency_diff(),
           rationale: `Agent took ${step_count} steps (threshold: ${this._step_threshold}). Enabling retry limits and early-stop flags may help.`,
@@ -431,7 +435,7 @@ export class ConfigEvolver implements EvolutionStrategy {
     if (tool_errors > 2) {
       mods.push(
         new CodeMod({
-          target_file: 'config.py',
+          target_file: target,
           description: 'Add error recovery due to tool failures',
           diff: this._error_recovery_diff(),
           rationale: `Detected ${tool_errors} tool errors in trajectory. Adding error recovery processors may improve reliability.`,
@@ -441,6 +445,27 @@ export class ConfigEvolver implements EvolutionStrategy {
     }
 
     return mods;
+  }
+
+  /**
+   * Choose a config file to target from the actual source map.
+   *
+   * Prefers a file whose name looks config-related; otherwise falls back to any
+   * available file, and finally to a bare 'config.py' when the map is empty
+   * (bug M4).
+   */
+  private _pick_target(source_code: Record<string, string>): string {
+    const names = Object.keys(source_code);
+    if (names.length > 0) {
+      for (const name of names) {
+        const lowered = name.toLowerCase();
+        if (lowered.includes('config') || lowered.includes('settings')) {
+          return name;
+        }
+      }
+      return names[0];
+    }
+    return 'config.py';
   }
 
   private _budget_diff(_trajectory: unknown): string {

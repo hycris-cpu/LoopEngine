@@ -26,10 +26,17 @@
 // no matter how good the rest of the change looks.
 const DANGEROUS_PATTERNS: RegExp[] = [
   /os\.system\s*\(/,
+  /os\.popen\s*\(/,
+  /os\.exec[lv]\w*\s*\(/,
+  /os\.(remove|unlink|rmdir)\s*\(/,
   /rm\s+-rf\b/,
+  /shutil\.rmtree\s*\(/,
+  /\.rmtree\s*\(/,
+  /\.unlink\s*\(/,
   /__import__\s*\(\s*['"]os['"]/,
   /__import__\s*\(\s*['"]subprocess['"]/,
-  /subprocess\.(call|run|Popen|check_output)\s*\(/,
+  /importlib\.import_module\s*\(/,
+  /subprocess\.(call|run|Popen|check_output|check_call)\s*\(/,
   /\bexec\s*\(/,
   /\beval\s*\(/,
 ];
@@ -173,6 +180,65 @@ export class CodeMod {
   }
 
   /**
+   * Apply this mod and report whether it actually landed.
+   *
+   * Unlike apply_to (which silently returns the files unchanged when the
+   * diff's anchor text isn't present), this returns a `[files, applied]`
+   * tuple. `applied` is true only when the target exists, the diff parses to
+   * at least one hunk, and every hunk's removed/context anchor was found and
+   * replaced. The evolution loop uses this to skip no-op mods instead of
+   * wasting a benchmark run on them (bug M1).
+   */
+  apply_with_status(files: Record<string, string>): [Record<string, string>, boolean] {
+    if (!(this.target_file in files)) {
+      return [{ ...files }, false];
+    }
+
+    const hunks = parse_unified_diff(this.diff);
+    if (hunks.length === 0) {
+      return [{ ...files }, false];
+    }
+
+    const result = { ...files };
+    let content = result[this.target_file];
+    let appliedAny = false;
+    let allAnchorsFound = true;
+
+    for (const [old_text, new_text] of hunks) {
+      if (old_text) {
+        if (content.includes(old_text)) {
+          content = replaceFirst(content, old_text, new_text);
+          appliedAny = true;
+        } else {
+          allAnchorsFound = false;
+        }
+      } else {
+        // Pure addition with no anchor — cannot place it reliably.
+        allAnchorsFound = false;
+      }
+    }
+
+    result[this.target_file] = content;
+    return [result, appliedAny && allAnchorsFound];
+  }
+
+  /**
+   * Return only the lines INTRODUCED by this diff (the '+' lines).
+   *
+   * Context and removed lines are existing code, not something this mod
+   * introduces, so they must not trigger the safety check. File headers
+   * ('+++') are excluded.
+   */
+  private _added_lines(): string {
+    const added: string[] = [];
+    for (const line of this.diff.split('\n')) {
+      if (line.startsWith('+++')) continue;
+      if (line.startsWith('+')) added.push(line.slice(1));
+    }
+    return added.join('\n');
+  }
+
+  /**
    * Check if this modification passes basic safety checks.
    *
    * Plain English: Before we let the agent change its own code, we check
@@ -188,7 +254,10 @@ export class CodeMod {
    *   dangerous patterns.
    */
   is_safe(): boolean {
-    const text_to_check = `${this.diff} ${this.description} ${this.rationale}`;
+    // Only the ADDED code lines are scanned. Scanning the description/rationale
+    // prose produced false positives, and scanning removed/context lines flags
+    // pre-existing code this mod did not introduce (bug H1).
+    const text_to_check = this._added_lines();
     for (const pattern of DANGEROUS_PATTERNS) {
       if (pattern.test(text_to_check)) {
         return false;

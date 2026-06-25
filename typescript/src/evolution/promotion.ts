@@ -89,6 +89,7 @@ export class PromotionGate {
   private readonly _min_improvement: number;
   private readonly _no_regression: number;
   private readonly _require_safety: boolean;
+  private readonly _is_better: ((cand: number, base: number) => boolean) | null;
 
   /**
    * Initialize the PromotionGate.
@@ -97,15 +98,21 @@ export class PromotionGate {
    *   min_improvement: Minimum aggregate score delta to approve (default 0.01).
    *   no_regression: Maximum allowed per-task regression (default 0.02).
    *   require_safety: Whether mods must pass is_safe() (default True).
+   *   is_better: Optional (candidate, baseline) => boolean comparator making the
+   *     optimization direction explicit (bug H2). When given, it decides whether
+   *     the candidate is an improvement, replacing the default higher-is-better
+   *     threshold + regression checks. Default null keeps higher-is-better.
    */
   constructor(
     min_improvement: number = 0.01,
     no_regression: number = 0.02,
-    require_safety: boolean = true
+    require_safety: boolean = true,
+    is_better: ((cand: number, base: number) => boolean) | null = null
   ) {
     this._min_improvement = min_improvement;
     this._no_regression = no_regression;
     this._require_safety = require_safety;
+    this._is_better = is_better;
   }
 
   /**
@@ -154,6 +161,45 @@ export class PromotionGate {
     // --- Check 2: Aggregate improvement ---
     const baseline_score = baseline.aggregate['mean_score'] ?? 0.0;
     const candidate_score = candidate.aggregate['mean_score'] ?? 0.0;
+
+    // Invalid candidates can never be promoted — a NaN score must not slip
+    // through (an invalid run must never rank as "best"; bug H2).
+    if (Number.isNaN(candidate_score)) {
+      details['validity'] = { passed: false, candidate_score };
+      return new PromotionDecision({
+        promoted: false,
+        reason: 'Invalid candidate: missing or NaN aggregate score.',
+        details,
+      });
+    }
+
+    // When an explicit optimization-direction comparator is supplied, it is the
+    // single source of truth for "did this improve?" — the default
+    // higher-is-better threshold and regression checks (which assume
+    // higher==better) are bypassed so they can't fight the comparator.
+    if (this._is_better !== null) {
+      const improved = Boolean(this._is_better(candidate_score, baseline_score));
+      details['improvement'] = {
+        baseline_score,
+        candidate_score,
+        comparator: 'custom is_better',
+        passed: improved,
+      };
+      if (!improved) {
+        return new PromotionDecision({
+          promoted: false,
+          reason: `Not an improvement under is_better: candidate ${candidate_score.toFixed(4)} vs baseline ${baseline_score.toFixed(4)}.`,
+          details,
+        });
+      }
+      details['verdict'] = 'promoted';
+      return new PromotionDecision({
+        promoted: true,
+        reason: `Approved by is_better: candidate ${candidate_score.toFixed(4)} beats baseline ${baseline_score.toFixed(4)}, safety ${this._require_safety ? 'passed' : 'skipped'}.`,
+        details,
+      });
+    }
+
     const improvement = candidate_score - baseline_score;
 
     details['improvement'] = {

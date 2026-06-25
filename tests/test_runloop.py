@@ -728,3 +728,130 @@ async def test_run_loop_no_config():
     assert result.total_steps == 1
     assert result.exit_reason == "end_turn"
     assert result.eval_result is not None
+
+
+# ---------------------------------------------------------------------------
+# Test 15: token accounting is linear, not quadratic (bug C1)
+# ---------------------------------------------------------------------------
+
+
+async def test_token_accounting_is_linear_not_quadratic():
+    """Given a model whose count_tokens reflects the conversation length,
+    When a multi-step run accumulates messages,
+    Then total_tokens must count each NEW message once (linear) — not re-count
+    the whole growing conversation every step (quadratic).
+
+    Conversation produced here (after the initial user prompt):
+        step0: assistant(tool_call) + tool result  -> 2 new
+        step1: assistant(tool_call) + tool result  -> 2 new
+        step2: assistant(text)                      -> 1 new
+    => 5 new messages total. The old quadratic bug reported 12."""
+    from loopengine.primitives.tools import ToolContext
+
+    class EchoTool:
+        @property
+        def name(self) -> str:
+            return "echo"
+
+        @property
+        def description(self) -> str:
+            return "Echo input"
+
+        @property
+        def input_schema(self) -> dict[str, Any]:
+            return {
+                "type": "function",
+                "function": {"name": "echo", "parameters": {"type": "object"}},
+            }
+
+        async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolResult:
+            return ToolResult(call_id="c1", output="ok")
+
+    class LenCountingModel:
+        """count_tokens returns the number of messages it is given."""
+
+        def __init__(self, responses: list[Message]) -> None:
+            self._responses = list(responses)
+            self._i = 0
+
+        async def complete(self, messages, tools=None):
+            idx = min(self._i, len(self._responses) - 1)
+            self._i += 1
+            return self._responses[idx]
+
+        def count_tokens(self, messages: list[Message]) -> int:
+            return len(messages)
+
+        # noqa
+
+    tc = ToolCall(name="echo", input={})
+    responses = [
+        Message(role="assistant", content="", tool_calls=(tc,)),
+        Message(role="assistant", content="", tool_calls=(tc,)),
+        Message(role="assistant", content="done"),
+    ]
+    model = LenCountingModel(responses)
+    task = MockTask(prompt="go", max_steps=10)
+    config = HarnessConfig(tools=[EchoTool()])
+
+    result = await run_loop(task=task, model=model, config=config)
+
+    assert result.total_steps == 3
+    assert result.total_tokens == 5
+
+
+# ---------------------------------------------------------------------------
+# Test 16: tool_schemas passed to model are in OpenAI format (bug: raw schema)
+# ---------------------------------------------------------------------------
+
+
+async def test_tool_schemas_passed_in_openai_format():
+    """Given a config with tools whose input_schema is raw JSON Schema,
+    When I run the loop,
+    Then the tools parameter passed to model.complete() should be wrapped
+    in OpenAI format ({type: 'function', function: {name, description, parameters}})
+    — NOT the raw input_schema dict."""
+    from loopengine.primitives.tools import ToolContext
+
+    captured_tools: list[Any] = []
+
+    class CapturingModel:
+        """A model that captures the tools argument for inspection."""
+        async def complete(self, messages, tools=None):
+            captured_tools.append(tools)
+            return Message(role="assistant", content="done")
+
+        def count_tokens(self, messages):
+            return 0
+
+    class SimpleTool:
+        @property
+        def name(self) -> str:
+            return "read_file"
+
+        @property
+        def description(self) -> str:
+            return "Read a file"
+
+        @property
+        def input_schema(self) -> dict[str, Any]:
+            return {"type": "object", "properties": {"path": {"type": "string"}}}
+
+        async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolResult:
+            return ToolResult(call_id="c1", output="ok")
+
+    model = CapturingModel()
+    task = MockTask(prompt="Read a file", max_steps=5)
+    config = HarnessConfig(tools=[SimpleTool()])
+
+    await run_loop(task=task, model=model, config=config)
+
+    # Verify tools were passed and in correct OpenAI format
+    assert len(captured_tools) == 1
+    assert captured_tools[0] is not None
+    tool_def = captured_tools[0][0]
+    assert tool_def["type"] == "function"
+    assert "function" in tool_def
+    assert tool_def["function"]["name"] == "read_file"
+    assert tool_def["function"]["description"] == "Read a file"
+    assert tool_def["function"]["parameters"] == {"type": "object", "properties": {"path": {"type": "string"}}}

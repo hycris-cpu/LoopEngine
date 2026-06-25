@@ -54,6 +54,10 @@ from loopengine.evolution.loop_engine import (
     EvolutionReport,
     LoopEngine,
 )
+from loopengine.evolution.checkpoint import (
+    CheckpointStore,
+    EvolutionCheckpoint,
+)
 from loopengine.evolution.diagnostics import (
     DiagnosticContext,
     ExecutionResult,
@@ -85,6 +89,9 @@ __all__ = [
     # loop_engine
     "EvolutionReport",
     "LoopEngine",
+    # checkpoint
+    "CheckpointStore",
+    "EvolutionCheckpoint",
     # diagnostics (Codex-style)
     "ExecutionResult",
     "LspDiagnostic",

@@ -437,3 +437,81 @@ class TestLocalSandboxIntegration:
 # Need to import asyncio for TimeoutError in test
 import asyncio
 import typing
+
+
+# ===========================================================================
+# Feature A: DockerSandbox — container isolation via an injected docker runner
+# ===========================================================================
+
+
+class _RecordingRunner:
+    """Fake host-docker runner that records argv/stdin and returns canned output."""
+
+    def __init__(self, result=("", "", 0), results=None):
+        self.calls: list[dict] = []
+        self._result = result
+        self._results = list(results) if results is not None else None
+
+    async def __call__(self, argv, stdin=None, timeout=30):
+        self.calls.append({"argv": list(argv), "stdin": stdin, "timeout": timeout})
+        if self._results:
+            return self._results.pop(0)
+        return self._result
+
+
+class TestDockerSandbox:
+    async def test_exec_builds_docker_command(self):
+        from loopengine.execution.sandbox import DockerSandbox
+
+        runner = _RecordingRunner(result=("hi\n", "", 0))
+        sb = DockerSandbox(container="c1", runner=runner)
+        out, err, code = await sb.exec("echo hi", cwd=".")
+        assert (out, err, code) == ("hi\n", "", 0)
+        argv = runner.calls[0]["argv"]
+        assert argv[0:2] == ["docker", "exec"]
+        assert "c1" in argv
+        assert "echo hi" in argv
+
+    async def test_read_file_returns_contents(self):
+        from loopengine.execution.sandbox import DockerSandbox
+
+        sb = DockerSandbox(container="c1", runner=_RecordingRunner(result=("data", "", 0)))
+        assert await sb.read_file("a.txt") == "data"
+
+    async def test_read_file_missing_raises(self):
+        from loopengine.execution.sandbox import DockerSandbox
+
+        sb = DockerSandbox(container="c1", runner=_RecordingRunner(result=("", "nope", 1)))
+        with pytest.raises(FileNotFoundError):
+            await sb.read_file("missing.txt")
+
+    async def test_write_file_mkdir_then_write_via_stdin(self):
+        from loopengine.execution.sandbox import DockerSandbox
+
+        runner = _RecordingRunner()
+        sb = DockerSandbox(container="c1", runner=runner, workdir="/workspace")
+        await sb.write_file("sub/f.txt", "hello")
+        assert any("mkdir" in c["argv"] for c in runner.calls)
+        write_call = runner.calls[-1]
+        assert write_call["stdin"] == "hello"
+        assert "/workspace/sub/f.txt" in " ".join(write_call["argv"])
+
+    async def test_path_escape_is_rejected(self):
+        from loopengine.execution.sandbox import DockerSandbox
+
+        sb = DockerSandbox(container="c1", runner=_RecordingRunner())
+        with pytest.raises(ValueError):
+            await sb.read_file("../etc/passwd")
+
+
+class TestDockerSandboxProvider:
+    async def test_acquire_runs_container_and_release_removes_it(self):
+        from loopengine.execution.sandbox import DockerSandbox, DockerSandboxProvider
+
+        runner = _RecordingRunner(result=("container123\n", "", 0))
+        provider = DockerSandboxProvider(image="python:3.12", runner=runner)
+        sb = await provider.acquire()
+        assert isinstance(sb, DockerSandbox)
+        assert any(c["argv"][0:2] == ["docker", "run"] for c in runner.calls)
+        await provider.release(sb)
+        assert any("rm" in c["argv"] for c in runner.calls)

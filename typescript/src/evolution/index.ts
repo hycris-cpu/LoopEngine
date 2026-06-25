@@ -8,6 +8,7 @@ export {
 } from './strategies';
 export { PromotionDecision, PromotionGate } from './promotion';
 export { EvolutionReport, LoopEngine } from './loop_engine';
+export { CheckpointStore, EvolutionCheckpoint } from './checkpoint';
 export {
   ExecutionResult,
   LspDiagnostic,

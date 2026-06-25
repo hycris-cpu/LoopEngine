@@ -223,3 +223,35 @@ describe('Zero regression tolerance', () => {
     expect(decision.promoted).toBe(true);
   });
 });
+
+describe('PromotionGate contract (bug H2)', () => {
+  test('invalid candidate (NaN score) is never promoted', () => {
+    const gate = new PromotionGate(0.0, 1.0);
+    const baseline = new BenchmarkResult({
+      scores: { task_0: new EvalResult({ passed: true, score: 0.5 }) },
+      aggregate: { mean_score: 0.5 },
+    });
+    const candidate = new BenchmarkResult({
+      scores: { task_0: new EvalResult({ passed: true, score: 0.5 }) },
+      aggregate: { mean_score: NaN },
+    });
+    const mod = new CodeMod({ target_file: 'x.py', diff: '' });
+    const decision = gate.validate(baseline, candidate, mod);
+    expect(decision.promoted).toBe(false);
+  });
+
+  test('custom is_better promotes a score decrease', () => {
+    const gate = new PromotionGate(0.01, 0.02, true, (cand, base) => cand < base);
+    const baseline = new BenchmarkResult({
+      scores: { task_0: new EvalResult({ passed: true, score: 0.5 }) },
+      aggregate: { mean_score: 0.5 },
+    });
+    const candidate = new BenchmarkResult({
+      scores: { task_0: new EvalResult({ passed: true, score: 0.3 }) },
+      aggregate: { mean_score: 0.3 },
+    });
+    const mod = new CodeMod({ target_file: 'x.py', diff: '' });
+    const decision = gate.validate(baseline, candidate, mod);
+    expect(decision.promoted).toBe(true);
+  });
+});
